@@ -1,8 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
-# Build 9: Email/Retention outbound (consent->approval->execute, fails-closed) + spend intake.
+# Build 10: Workflow C — two-avatar podcast pipeline (permission gate -> storyboard -> QA -> publish).
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **80/80 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **87/87 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -29,6 +29,7 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **80/80 
 | **Build 8 — ops health/alert (§8)** | `scripts/ops_check.py`: queue depth, unprocessed webhooks, stalled jobs, DB size, disk free, backup freshness → report + exit 1 on alerts. Correctly detects the box's real disk condition (0.7% free = alert) |
 | **Build 9 — Email/Retention (§3 §5 Workflow E)** | `email_nurture` agent: opt-out stops automation at CREATE (no approval/send); granted contact gets a `send:email` human-gated approval; the executor **re-checks consent at EXECUTION time** (409 on revocation between draft and send — CASL-safe); keyless send fails CLOSED (brevo: no key / no plaintext recipient) with the attempt recorded. All five paths verified |
 | **Build 9 — spend intake (§10)** | `POST /v1/campaigns/{id}/spend` reconciles provider-reported spend idempotently (unique (campaign,date,provider_ref), ON CONFLICT upsert) → dashboard reflects it (405.90 after ingest) |
+| **Build 10 — podcast pipeline (Workflow C §5 P2)** | `podcast_producer` agent: **likeness+voice permission hard stop** (no refs → blocked), script compliance QA (banned claims → blocked), deterministic storyboard + render manifest (full + 3 shorts, SIMULATED), human `publish:podcast` approval → local executor receipt → asset published. All six paths verified |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -69,7 +70,7 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 1. **Provision real Google creds** → set `GOOGLE_OAUTH_JSON` service account + `GSC_SITE_URL`/`GA4_PROPERTY_ID`, flip `provider_routes.demand.pull` to `gsc` (dev_demand is the verified fallback)
 2. **Real Odoo 17** (docker-compose `--profile crm`), add `apex_external_ref` field on `crm.lead`, set `ODOO_MOCK=0`
 3. **OpenRouter key** → content_briefs start producing real drafts (jobs already complete as `not_configured` when keyless)
-4. P2: HeyGen two-avatar podcast (§5 workflow C) — pipeline can be built keyless with the guaranteed-fallback ladder.
+4. P2: HeyGen two-avatar podcast — pipeline is built & verified keyless (permission gate, storyboard, QA, approval, receipt); real renders need HEYGEN_API_KEY/RUNWAY_API_KEY + avatar rights refs. Provider adapters heygen.py/runway.py already exist (fails closed).
 5. Email nurture is wired end-to-end; real sends need BREVO_API_KEY + a plaintext-recipient source (Odoo crm.lead is the right place — APEX stores only hashes by design).
 6. Full content lifecycle now runs keyless end-to-end (template drafts) — provisioning OPENROUTER_API_KEY swaps templates for real drafts with zero code change.
 7. Recommend-only spend optimizer + QA are wired; optimizer also guards budget increases now. Remaining P1 financing: connect a real GA4/Ads spend feed (needs a service-account key) so `campaign_spend_daily` is reconciled from providers instead of demo rows.
