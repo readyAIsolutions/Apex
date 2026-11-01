@@ -96,4 +96,6 @@ class AssetCreate(BaseModel):
 class AssetSubmitIn(BaseModel):
     platform: str                     # site|google|meta|youtube|email|blog
     publish_action: str = "publish"
+    text: Optional[str] = None        # final copy; QA-gated before the human gate
+    force: bool = False               # editor override — human authority beats the QA advisory
     extra: dict[str, Any] = {}

@@ -7,6 +7,7 @@ from app.auth import require_role
 from app.db import TenantScope
 from app.schemas import AssetCreate, AssetSubmitIn
 from app.services import approvals as approvals_service
+from app.services.content_qa import qa_content
 
 router = APIRouter(tags=["assets"])
 
@@ -36,10 +37,21 @@ async def submit_asset(asset_id: str, body: AssetSubmitIn,
             raise HTTPException(404, "asset not found")
         if asset["status"] != "draft":
             raise HTTPException(409, f"asset already {asset['status']}")
+        # Compliance/QA precondition (§3 §11): banned copy blocks submit unless forced.
+        qa = None
+        if body.text:
+            qa = qa_content(body.text)
+            failures = [f for f in qa["findings"] if f["level"] == "fail"]
+            if failures and not body.force:
+                raise HTTPException(409, detail={
+                    "error": "qa_failed", "force_required": True,
+                    "findings": failures})
         payload = {"asset_id": str(uid), "kind": asset["kind"], "platform": body.platform,
-                   "publish_action": body.publish_action, **body.extra}
+                   "publish_action": body.publish_action, "force": body.force, **body.extra}
         approval = await approvals_service.create_approval(
             conn, principal.tenant_id, f"publish:{body.platform}", payload)
         await conn.execute("UPDATE content_assets SET status = 'submitted' WHERE id = $1", uid)
         return {"asset_id": str(uid), "approval_id": str(approval["id"]),
-                "expires_at": approval["expires_at"].isoformat()}
+                "expires_at": approval["expires_at"].isoformat(),
+                "qa": {"pass": qa["pass"] if qa else True,
+                       "findings_count": len(qa["findings"]) if qa else 0}}

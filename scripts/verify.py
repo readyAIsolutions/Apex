@@ -301,6 +301,30 @@ async def main():
         check("executor publishes with receipt", exec_ok,
               f"HTTP {exec_r.status_code}: {exec_r.text[:160]}")
 
+        # Compliance/QA as a precondition on the publish gate
+        bad_asset = client.post("/v1/assets", headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                                json={"kind": "article"}).json()["asset_id"]
+        q_reject = client.post(f"/v1/assets/{bad_asset}/submit",
+                               headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                               json={"platform": "site", "text": "guaranteed results with a risk-free setup"})
+        check("submit rejected when QA fails",
+              q_reject.status_code == 409
+              and q_reject.json().get("detail", {}).get("error") == "qa_failed",
+              f"HTTP {q_reject.status_code} body={q_reject.text[:80]}")
+        q_force = client.post(f"/v1/assets/{bad_asset}/submit",
+                              headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                              json={"platform": "site", "text": "guaranteed results with a risk-free setup",
+                                    "force": True})
+        check("force override submits despite QA fail", q_force.status_code == 201,
+              f"HTTP {q_force.status_code}")
+        cle_ass = client.post("/v1/assets", headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                              json={"kind": "article"}).json()["asset_id"]
+        q_clean = client.post(f"/v1/assets/{cle_ass}/submit",
+                              headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                              json={"platform": "site", "text": "We answer missed calls and book consultations. Opt-out anytime."})
+        check("clean copy submits (QA pass)", q_clean.status_code == 201 and q_clean.json()["qa"]["pass"] is True,
+              f"HTTP {q_clean.status_code}")
+
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
     n = await run_once()

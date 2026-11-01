@@ -1,8 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
-# Build 5: Paid Media Optimizer (recommend-only) + Compliance/QA content gate.
+# Build 6: Compliance/QA wired AS a precondition on the publish gate.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **57/57 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **60/60 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -22,6 +22,7 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **57/57 
 | **Build 4 — approval queue** | `GET /v1/approvals?state=pending` (approver+) lists the operator's open gates; verified to surface the pending publish gate |
 | **Build 5 — Paid Media Optimizer (recommend-only §11 P1)** | deterministic economics gate: refuses scale-ups on tiny samples / CAC past 25% ceiling / budget breach; holds until signed work. `GET /v1/ads/optimizer/recommend` (marketer+) + `paid_media` job — verified refuse on the demo campaign (1 qualified < 3) |
 | **Build 5 — Compliance/QA content gate (§3 §11)** | deterministic checks: banned outcome-promise/ROI phrases (fail) + uncited statistics/consent (warn); `POST /v1/qa/content` (editor+) + `content_qa` job — verified flags banned copy, passes clean copy; template drafts reworded to pass clean |
+| **Build 6 — QA as a publish-gate precondition** | `POST /v1/assets/{id}/submit` runs the compliance gate on submitted copy: banned copy → **409 qa_failed**; `force:true` override (human authority wins) → submits; clean copy → submits → approval. Verified all three paths |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -65,7 +66,7 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 4. P2: HeyGen two-avatar podcast (§5 workflow C)
 5. Email nurture outbound (needs a plaintext-contact source — Odoo crm.lead is the right place; APEX stores only hashes) + Brevo key
 6. Full content lifecycle now runs keyless end-to-end (template drafts) — provisioning OPENROUTER_API_KEY swaps templates for real drafts with zero code change.
-7. Recommend-only spend optimizer + compliance QA are in place; hooking them into the publish gate (QA must pass before submit / optimizer consulted before any spend change) is a wiring step, not a new capability.
+7. Recommend-only spend optimizer + compliance QA are in place; QA is now a publish-gate precondition (409 on banned copy, editor force override). Next wiring: consult the optimizer before any spend change (needs a spend-write endpoint).
 
 ## Pitfalls recorded (this build)
 
