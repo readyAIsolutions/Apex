@@ -71,6 +71,10 @@ class CampaignCreate(BaseModel):
     status: str = "draft"
 
 
+class BudgetChange(BaseModel):
+    budget_cap_minor: int = Field(ge=0)
+
+
 class ResearchRequest(BaseModel):
     industry: str
     locale: str = "CA-AB"

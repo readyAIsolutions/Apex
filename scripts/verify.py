@@ -103,6 +103,12 @@ async def main():
         "INSERT INTO contacts (tenant_id, full_name, email_hash, consent_status) "
         "VALUES ($1,'Secret B Contact', encode(sha256('b-secret@example.com'::bytea),'hex'),'granted') "
         "ON CONFLICT DO NOTHING", TENANT_B)
+    # second-tenant admin API key (P3 isolation proof)
+    b_key = "b_tenant_admin_key"
+    await migrator.execute(
+        "INSERT INTO api_keys (tenant_id, name, key_hash, roles) VALUES "
+        "($1, 'tenant_b_admin', $2, ARRAY['admin']) ON CONFLICT (key_hash) DO NOTHING",
+        TENANT_B, hashlib.sha256(b_key.encode()).hexdigest())
 
     print("== 1. cross-tenant isolation (RLS, §11 P0) ==")
     async with app_scope(TENANT_AIMBEX) as conn:
@@ -324,6 +330,30 @@ async def main():
                               json={"platform": "site", "text": "We answer missed calls and book consultations. Opt-out anytime."})
         check("clean copy submits (QA pass)", q_clean.status_code == 201 and q_clean.json()["qa"]["pass"] is True,
               f"HTTP {q_clean.status_code}")
+
+        # Optimizer-guarded budget change (§10) + second-tenant isolation (P3)
+        bud_up = client.post("/v1/campaigns/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1/budget",
+                             headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                             json={"budget_cap_minor": 300000})
+        check("budget increase blocked by optimizer",
+              bud_up.status_code == 409 and bud_up.json().get("detail", {}).get("error") == "budget_increase_blocked",
+              f"HTTP {bud_up.status_code}")
+        bud_dn = client.post("/v1/campaigns/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1/budget",
+                             headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                             json={"budget_cap_minor": 100000})
+        check("budget decrease allowed",
+              bud_dn.status_code == 200 and bud_dn.json().get("increased") is False,
+              f"HTTP {bud_dn.status_code}")
+        bdash = client.get("/v1/dashboard/overview", headers={"Authorization": "Bearer b_tenant_admin_key"})
+        bjs = bdash.json() if bdash.status_code == 200 else {}
+        check("second tenant sees only its own (empty) data",
+              bdash.status_code == 200 and bjs.get("spend_usd") == 0 and bjs.get("wins") == 0,
+              f"HTTP {bdash.status_code} spend={bjs.get('spend_usd')}")
+        bsub = client.post(f"/v1/assets/{gate_asset_id}/submit",
+                           headers={"Authorization": "Bearer b_tenant_admin_key"},
+                           json={"platform": "site"})
+        check("second tenant cannot touch tenant A's asset", bsub.status_code == 404,
+              f"HTTP {bsub.status_code}")
 
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
