@@ -1,8 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
-# Build 4: keyless content lifecycle (template-draft fallback) + lead booking + approval queue.
+# Build 5: Paid Media Optimizer (recommend-only) + Compliance/QA content gate.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **50/50 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **57/57 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -20,6 +20,8 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **50/50 
 | **Build 4 — keyless content lifecycle** | `content_draft` falls back to a clearly-labelled SIMULATED template draft (no hard failure) → briefs ALWAYS produce draft `content_assets` → submit → approve → publish → receipt; verified keyless (11 articles) |
 | **Build 4 — lead booking (§5 Workflow B)** | `POST /v1/leads/{contact_id}/appointments` (editor+) books an approved consultation slot via Odoo calendar mirror; verified (mock external id) |
 | **Build 4 — approval queue** | `GET /v1/approvals?state=pending` (approver+) lists the operator's open gates; verified to surface the pending publish gate |
+| **Build 5 — Paid Media Optimizer (recommend-only §11 P1)** | deterministic economics gate: refuses scale-ups on tiny samples / CAC past 25% ceiling / budget breach; holds until signed work. `GET /v1/ads/optimizer/recommend` (marketer+) + `paid_media` job — verified refuse on the demo campaign (1 qualified < 3) |
+| **Build 5 — Compliance/QA content gate (§3 §11)** | deterministic checks: banned outcome-promise/ROI phrases (fail) + uncited statistics/consent (warn); `POST /v1/qa/content` (editor+) + `content_qa` job — verified flags banned copy, passes clean copy; template drafts reworded to pass clean |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -63,6 +65,7 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 4. P2: HeyGen two-avatar podcast (§5 workflow C)
 5. Email nurture outbound (needs a plaintext-contact source — Odoo crm.lead is the right place; APEX stores only hashes) + Brevo key
 6. Full content lifecycle now runs keyless end-to-end (template drafts) — provisioning OPENROUTER_API_KEY swaps templates for real drafts with zero code change.
+7. Recommend-only spend optimizer + compliance QA are in place; hooking them into the publish gate (QA must pass before submit / optimizer consulted before any spend change) is a wiring step, not a new capability.
 
 ## Pitfalls recorded (this build)
 

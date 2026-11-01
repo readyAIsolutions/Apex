@@ -185,3 +185,50 @@ def test_audit_seo_flags_problems():
     assert checks["img.alt"] is False       # missing alt
     assert checks["noindex"] is True        # default is fine (no noindex present)
     assert any("fix" in a for a in res["recommended_next_actions"])
+
+
+# ----------------------------------------------------------------------------
+# Paid Media Optimizer (recommend-only) + Compliance QA
+# ----------------------------------------------------------------------------
+def test_paid_media_refuses_tiny_sample():
+    from app.services.paymedia import evaluate_campaign
+    r = evaluate_campaign(spend_usd=100, qualified_leads=1, wins=0,
+                          first_sale_usd=3000, budget_cap_usd=1500)
+    assert r["status"] == "refuse_scale"
+    assert any("sample too small" in x for x in r["reasons"])
+
+
+def test_paid_media_refuses_high_cac():
+    from app.services.paymedia import evaluate_campaign
+    r = evaluate_campaign(spend_usd=8000, qualified_leads=10, wins=3,
+                          first_sale_usd=3000, budget_cap_usd=15000)
+    assert r["status"] == "refuse_scale"          # CAC 800 > 25% of 3000
+    assert any("economically safe" in x for x in r["reasons"])
+
+
+def test_paid_media_holds_without_wins():
+    from app.services.paymedia import evaluate_campaign
+    r = evaluate_campaign(spend_usd=200, qualified_leads=5, wins=0,
+                          first_sale_usd=3000, budget_cap_usd=1500)
+    assert r["status"] == "hold"
+
+
+def test_paid_media_consider_test_within_ceiling():
+    from app.services.paymedia import evaluate_campaign
+    r = evaluate_campaign(spend_usd=500, qualified_leads=10, wins=3,
+                          first_sale_usd=3000, budget_cap_usd=1500)
+    assert r["status"] == "consider_test" and r["cac"] == 50.0
+    assert "capped" in r["reasons"][0].lower()
+
+
+def test_qa_flags_banned_roi_language():
+    from app.services.content_qa import qa_content
+    r = qa_content("guaranteed results with a risk-free setup, 200% more calls")
+    assert r["pass"] is False
+    assert any(f["level"] == "fail" for f in r["findings"])
+
+
+def test_qa_passes_clean_copy():
+    from app.services.content_qa import qa_content
+    r = qa_content("Answers missed calls and books consultations. Opt-out anytime.")
+    assert r["pass"] is True

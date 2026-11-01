@@ -108,7 +108,7 @@ def _template_draft(topic: str) -> str:
         "the next emergency. An AI receptionist answers instantly, captures the details, "
         "and books the follow-up so no qualified lead falls through the cracks.\n\n"
         "Book a consultation to see your own call-handling economics.\n"
-        "(No guaranteed-ROI claims are made in this draft.)")
+        "(No outcome promises and no uncited figures are made in this draft.)")
 
 
 async def content_draft(conn, job, payload) -> AgentJobResult:
@@ -233,10 +233,62 @@ async def attribution(conn, job, payload) -> AgentJobResult:
         warnings=["first-touch UTM only; phone/offline join pending (>= 1 unknown may hide revenue)"])
 
 
+async def paid_media(conn, job, payload) -> AgentJobResult:
+    """§11 P1 recommend-only optimizer: per live campaign, refuses unsafe scale-ups."""
+    from app.services.paymedia import evaluate_campaign
+    campaigns = await conn.fetch(
+        "SELECT id, name, budget_cap_minor FROM campaigns "
+        "WHERE tenant_id = $1 AND status IN ('live','approved') "
+        "ORDER BY created_at DESC LIMIT 20", payload["tenant_id"])
+    recs = []
+    for c in campaigns:
+        spend = (await conn.fetchval(
+            "SELECT COALESCE(SUM(spend_minor),0)::bigint FROM campaign_spend_daily "
+            "WHERE tenant_id = $1 AND campaign_id = $2", payload["tenant_id"], c["id"]) or 0) / 100
+        qualified = await conn.fetchval(
+            "SELECT COUNT(DISTINCT contact_id) FROM opportunity_attribution "
+            "WHERE tenant_id = $1 AND campaign_id = $2", payload["tenant_id"], c["id"])
+        win = await conn.fetchrow(
+            "SELECT COUNT(*)::int n, COALESCE(AVG(o.actual_value),0)::numeric avgv, "
+            "COALESCE(SUM(o.margin),0)::numeric m "
+            "FROM opportunity_attribution a JOIN opportunities o ON o.id = a.opportunity_id "
+            "WHERE a.tenant_id = $1 AND a.campaign_id = $2 AND o.stage = 'won'",
+            payload["tenant_id"], c["id"])
+        rec = evaluate_campaign(spend_usd=spend, qualified_leads=qualified,
+                                wins=win["n"], first_sale_usd=win["avgv"] or None,
+                                margin_usd=win["m"], budget_cap_usd=c["budget_cap_minor"] / 100)
+        recs.append({"campaign": c["name"], **rec})
+    refused = any(r["status"] == "refuse_scale" for r in recs)
+    return AgentJobResult(
+        status="succeeded",
+        structured_output={"recommendations": recs, "any_refused_scale": refused},
+        confidence=0.95,
+        recommended_next_actions=(["enforce refusal — do not auto-scale"] if refused
+                                   else ["run capped tests within ceilings"]))
+
+
+async def content_qa(conn, job, payload) -> AgentJobResult:
+    """§3 Compliance/QA: deterministic pre-approval check of draft text."""
+    from app.services.content_qa import qa_content
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    text = (inp or {}).get("input", {}).get("text", "")
+    if not text:
+        return AgentJobResult(status="not_configured",
+                              warnings=["no text provided — pass input.text"],
+                              recommended_next_actions=["provide input.text"])
+    res = qa_content(text)
+    return AgentJobResult(status="succeeded", structured_output=res, confidence=1.0,
+                          recommended_next_actions=res["recommended_next_actions"])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
+    "content_qa": content_qa,
     "seo_auditor": seo_audit,
     "attribution": attribution,
+    "paid_media": paid_media,
     "crm_sync": crm_sync,
 }

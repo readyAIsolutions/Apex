@@ -83,6 +83,10 @@ class SeoAuditIn(BaseModel):
     html: Optional[str] = None
 
 
+class QaContentIn(BaseModel):
+    text: str
+
+
 class AssetCreate(BaseModel):
     kind: str = "article"
     campaign_id: Optional[uuid.UUID] = None

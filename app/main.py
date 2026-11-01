@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 from app import db
 from app.config import settings
 from app.routers import (
-    actions, agents, approvals, assets, campaigns, dashboard, health,
-    leads, questions, seo, webhooks,
+    actions, ads, agents, approvals, assets, campaigns, dashboard, health,
+    leads, qa, questions, seo, webhooks,
 )
 
 log = logging.getLogger("apex")
@@ -49,6 +49,8 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router, prefix="/v1")
     app.include_router(questions.router, prefix="/v1")
     app.include_router(seo.router, prefix="/v1")
+    app.include_router(qa.router, prefix="/v1")
+    app.include_router(ads.router, prefix="/v1")
     app.include_router(campaigns.router, prefix="/v1")
     app.include_router(agents.router, prefix="/v1")
     app.include_router(assets.router, prefix="/v1")

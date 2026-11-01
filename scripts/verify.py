@@ -238,6 +238,28 @@ async def main():
         check("seo audit endpoint returns checks",
               rseo.status_code == 200 and rseo.json().get("ok_all") is True, f"HTTP {rseo.status_code}")
 
+        rads = client.get("/v1/ads/optimizer/recommend",
+                          headers={"Authorization": "Bearer apex_dev_analyst_key"},
+                          params={"campaign_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"})
+        check("optimizer denied to analyst (marketer+)", rads.status_code == 403, str(rads.status_code))
+        rads = client.get("/v1/ads/optimizer/recommend",
+                          headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                          params={"campaign_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"})
+        rads_json = rads.json() if rads.status_code == 200 else {}
+        check("optimizer refuses tiny-sample scale",
+              rads.status_code == 200 and rads_json.get("status") == "refuse_scale",
+              f"status={rads_json.get('status')} reason={str(rads_json.get('reasons'))[:80]}")
+        rqa = client.post("/v1/qa/content",
+                          headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                          json={"text": "guaranteed results with a risk-free setup, 200% more calls"})
+        check("qa flags banned ROI language",
+              rqa.status_code == 200 and rqa.json().get("pass") is False, str(rqa.status_code))
+        rqa2 = client.post("/v1/qa/content",
+                           headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                           json={"text": "Answers missed calls and books consultations. Opt-out anytime."})
+        check("qa passes clean copy", rqa2.status_code == 200 and rqa2.json().get("pass") is True,
+              str(rqa2.status_code))
+
         rjob = client.post("/v1/agents/jobs",
                            headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
                            json={"agent": "crm_sync", "goal": "sync contacts",
@@ -364,6 +386,38 @@ async def main():
     check("attribution joined won deal to source",
           bool(att_rows) and any(r["source"] == "ad" for r in att_rows),
           f"{len(att_rows)} attributed: {[r['source'] for r in att_rows]}")
+
+    print("== 9. Paid media optimizer + compliance QA job E2E (§11 P1) ==")
+    r = aioredis.from_url(os.environ["REDIS_URL"])
+    try:
+        async with app_scope(TENANT_AIMBEX) as conn:
+            pm_job = await jobs_service.create_job(
+                conn, TENANT_AIMBEX,
+                AgentJobEnvelope(agent="paid_media", goal="Recommend-only spend review",
+                                 idempotency_key=f"verify:pm:{uuid.uuid4().hex[:8]}"), redis=r)
+            qa_job = await jobs_service.create_job(
+                conn, TENANT_AIMBEX,
+                AgentJobEnvelope(agent="content_qa", goal="QA the draft",
+                                 input={"text": "guaranteed results with a risk-free setup"},
+                                 idempotency_key=f"verify:qa:{uuid.uuid4().hex[:8]}"), redis=r)
+            pm_id, qa_id = pm_job["id"], qa_job["id"]
+        n4 = await run_once()
+        async with app_scope(TENANT_AIMBEX) as conn:
+            pm_row = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                         UUID(pm_id))
+            qa_row = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                         UUID(qa_id))
+    finally:
+        await r.aclose()
+    pm_out = json.loads(pm_row["output_json"])["structured_output"] if pm_row and pm_row["output_json"] else {}
+    qa_out = json.loads(qa_row["output_json"])["structured_output"] if qa_row and qa_row["output_json"] else {}
+    pm_recs = pm_out.get("recommendations", [])
+    check("optimizer job refuses unsafe scale",
+          pm_out.get("any_refused_scale") is True and any(
+              rec["status"] == "refuse_scale" for rec in pm_recs), f"{len(pm_recs)} campaigns")
+    check("optimizer reason is honest (sample)", bool(pm_recs) and any(
+        "sample too small" in r_ for rec in pm_recs for r_ in rec["reasons"]))
+    check("qa job flags banned language", qa_out.get("pass") is False, str(qa_out.get("findings"))[:80])
 
     await migrator.close()
     return len(FAIL)
