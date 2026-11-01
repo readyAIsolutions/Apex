@@ -19,12 +19,8 @@ Honesty contract (matches the rest of APEX):
   - All output creative is explicitly a hypothesis to test, never an established winner.
   - Public research is preferred; confidential_evidence is only ever the caller's own data.
 """
-import datetime
-import json
-import uuid
+import hashlib
 from typing import Optional
-
-from app.schemas import AgentJobResult
 
 # --- Deterministic evidence grading (no hype) ------------------------------------------
 
@@ -34,7 +30,6 @@ GRADE_ORDER = ["A", "B", "C", "D"]
 def grade_evidence(sample_size: Optional[int], methodology: str,
                    has_quantified_result: bool) -> tuple[str, str]:
     """Return (grade, rationale). Only provable inputs raise the grade."""
-    verbose = methodology == "first_party" or methodology == "controlled_test"
     if methodology in ("first_party", "controlled_test"):
         if sample_size is not None and sample_size >= 30 and has_quantified_result:
             return "A", "first-party controlled result, n>=30, quantified"
@@ -147,7 +142,18 @@ def reverse_funnel(creative_type: str, hook: str, offer: str, cta: str,
 
 # --- Creative evolution (original client variants) -----------------------------------------
 
-def evolve_variant(principle: dict, brand: dict, original: dict) -> dict:
+ANGLE_ORDER = ["problem_agitation", "direct_offer", "curiosity_gap", "loss_aversion", "social_proof"]
+
+
+def candidate_angles(original: dict, n: int = 3) -> list[str]:
+    """Detected hook angle first, then distinct alternates -> several positioned variants to test."""
+    hooks = analyze_copy(original.get("headline", ""), original.get("offer_text", ""), "")["headline_hook"]
+    first = [h for h in hooks if h in ANGLE_ORDER][:1]
+    rest = [a for a in ANGLE_ORDER if a not in first]
+    return (first + rest)[:n]
+
+
+def evolve_variant(principle: dict, brand: dict, original: dict, angle: Optional[str] = None) -> dict:
     """Create an ORIGINAL campaign variant from a proven principle + the client's brand.
     Uses underlying marketing principle, NOT copied scripts/headlines/footage.
     Result is always labelled a hypothesis, never an established winner."""
@@ -169,7 +175,7 @@ def evolve_variant(principle: dict, brand: dict, original: dict) -> dict:
         "direct_offer": f"Get a free {service} walkthrough for your {industry} business in {area}.",
     }
     hooks = analyze_copy(original.get("headline", ""), original.get("offer_text", ""), "")["headline_hook"]
-    angle_key = next((h for h in hooks if h in angle_map), "direct_offer")
+    angle_key = angle if angle in angle_map else next((h for h in hooks if h in angle_map), "direct_offer")
 
     # Derive a CTA from the original funnel (or default to a booking CTA for this client).
     funnel = reverse_funnel(base_type, original.get("hook_first_3s", ""),
@@ -185,6 +191,7 @@ def evolve_variant(principle: dict, brand: dict, original: dict) -> dict:
 
     return {
         "headline": angle_map[angle_key],
+        "angle": angle_key,
         "cta": cta,
         "positioning_note": "original variant derived from a marketing PRINCIPLE (never copied script/asset)",
         "hypothesis": True,
@@ -206,13 +213,19 @@ def ab_test_design(control: dict, variants: list[dict], audience: str = "",
     }
 
 
-def build_playbook(variant: dict, evidence_grade: str, industry: str) -> dict:
+def content_hash(source_url: str, headline: str) -> str:
+    return hashlib.sha256(f"{source_url}|{headline}".encode("utf-8")).hexdigest()
+
+
+def build_playbook(variant: dict, evidence_grade: str, industry: str, simulated: bool = False) -> dict:
     """Package an original variant + its evidence level into a reusable per-industry playbook."""
-    level = "verified" if evidence_grade == "A" else \
+    level = "hypothesis" if simulated else \
+            "verified" if evidence_grade == "A" else \
             "strong_support" if evidence_grade == "B" else \
             "hypothesis" if evidence_grade in ("C",) else "unsubstantiated"
     return {
-        "name": f"{industry} {variant.get('headline', '')[:40]}".strip(),
+        "name": f"{industry} [{variant.get('angle', 'angle')}] "
+                f"{hashlib.sha256((variant.get('headline', '') + variant.get('cta', '')).encode()).hexdigest()[:8]}",
         "industry": industry,
         "playbook_json": {
             "principle": variant.get("positioning_note", ""),
@@ -221,5 +234,6 @@ def build_playbook(variant: dict, evidence_grade: str, industry: str) -> dict:
         },
         "evidence_level": level,
         "rights_json": {"origin": "original — derived principle, not copied asset",
+                        "simulated_source": simulated,
                         "license_status": "client-authorized template"},
     }

@@ -9,7 +9,7 @@ import hmac
 import json
 import uuid
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.config import settings
 from app.db import TenantScope, audit
@@ -35,15 +35,24 @@ async def webhook(provider: str, request: Request,
     raw = await request.body()
     secret = settings.webhook_secret(provider)
     if not secret:
-        return {"error": f"no webhook secret configured for provider '{provider}'"}
+        raise HTTPException(503, f"no webhook secret configured for provider '{provider}'")
     if not _verify_signature(secret, raw, x_apex_signature):
-        return {"error": "invalid signature"}
+        raise HTTPException(401, "invalid signature")
 
-    tenant_id = uuid.UUID(x_tenant_id) if x_tenant_id else DEFAULT_TENANT
+    try:
+        tenant_id = uuid.UUID(x_tenant_id) if x_tenant_id else DEFAULT_TENANT
+    except ValueError:
+        raise HTTPException(422, "invalid X-Tenant-Id") from None
+    async with TenantScope(None) as lookup:   # auth-lookup policy: tenant must exist and be active
+        tstatus = await lookup.fetchval("SELECT status FROM tenants WHERE id = $1", tenant_id)
+    if tstatus != "active":
+        raise HTTPException(404, "unknown tenant")
     try:
         payload = json.loads(raw)
-    except Exception:
+    except ValueError:
         payload = {"_raw": raw.decode(errors="replace")}
+    if not isinstance(payload, dict):
+        payload = {"_raw": payload}
 
     event_key = str(payload.get("event_key") or payload.get("id") or
                     hashlib.sha256(raw).hexdigest()[:32])

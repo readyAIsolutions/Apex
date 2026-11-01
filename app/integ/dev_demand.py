@@ -6,7 +6,6 @@ credentialed pulls land — same row shape, no pipeline change (guaranteed-fallb
 ladder pattern).
 """
 import datetime
-import uuid
 
 from app.integ.base import (
     AdapterResult, HealthResult, ProviderAdapter, ReconcileResult, WebhookOutcome,

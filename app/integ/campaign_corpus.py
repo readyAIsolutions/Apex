@@ -8,8 +8,6 @@ Includes deliberately-divergent examples so the Evidence Auditor can DEMOTE hype
 funnels/copy) to grade D and KEEP only provable, well-structured creative at A/B/C.
 """
 import datetime
-import uuid
-from typing import Optional
 
 from app.integ.base import (
     AdapterResult, HealthResult, ProviderAdapter, ReconcileResult, WebhookOutcome,

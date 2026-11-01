@@ -22,7 +22,7 @@ KEEP = 7
 # from the snapshot itself.
 SCHEMA_MIGRATIONS = ["0001_init.sql", "0002_crm.sql", "0003_marketing.sql", "0004_jobs.sql",
                      "0005_rls_roles.sql", "0007_auth_lookup.sql", "0009_opportunity_attribution.sql",
-                     "0015_conversion_intel.sql"]
+                     "0015_conversion_intel.sql", "0016_conversion_dedupe.sql"]
 # NOTE: never add data-seeding migrations (route seeds, e.g. 0008/0010-0014) to
 # SCHEMA_MIGRATIONS — they FK-insert rows that assume a TENANT already exists, and in a
 # fresh restore tenants come from the snapshot, not migrations. Apply schema-only

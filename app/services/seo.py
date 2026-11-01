@@ -75,7 +75,7 @@ def audit_seo(html: str, url: str = "") -> dict:
 
     checks = [
         ("title", bool(title) and 10 <= len(title) <= 70,
-         f"missing" if not title else f"len={len(title)}"),
+         "missing" if not title else f"len={len(title)}"),
         ("meta.description", bool(c.meta_desc) and 50 <= len(c.meta_desc) <= 170,
          "missing/short"),
         ("h1", c.h1_count == 1, f"count={c.h1_count}"),

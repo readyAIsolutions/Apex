@@ -3,7 +3,6 @@ Google service-account OAuth, GSC request shape, dev-demand honesty."""
 import asyncio
 import json
 
-import pytest
 
 from app.integ.google_oauth import build_assertion
 from app.integ.odoo_crm import OdooCRMAdapter

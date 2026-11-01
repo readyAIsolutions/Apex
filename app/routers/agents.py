@@ -1,5 +1,4 @@
 """§7: POST /v1/agents/jobs (orchestrator+) + GET /v1/agents/jobs/{id} (own tenant)."""
-import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
 

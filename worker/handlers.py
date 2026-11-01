@@ -343,7 +343,7 @@ def _podcast_storyboard(topic: str, cta: str) -> dict:
                   {"name": "Host B", "permission": "documented"}],
         "segments": [
             {"beat": "hook", "lines": ["Every missed call is a missed estimate."]},
-            {"beat": "problem", "lines": [f"Restoration firms in Lloydminster and Edmonton lose work after hours."]},
+            {"beat": "problem", "lines": ["Restoration firms in Lloydminster and Edmonton lose work after hours."]},
             {"beat": "solution", "lines": ["An AI receptionist answers instantly, captures details, and books the follow-up."]},
             {"beat": "cta", "lines": [cta]},
         ],
@@ -615,7 +615,7 @@ async def social_distribute(conn, job, payload) -> AgentJobResult:
             status="succeeded", structured_output={"blocked": "asset_not_published"},
             warnings=["social distribution requires a PUBLISHED asset"],
             recommended_next_actions=["publish the asset first (submit -> approve -> execute)"])
-    title = f"AI receptionist for restoration firms"
+    title = "AI receptionist for restoration firms"
     approvals = []
     for p in platforms:
         post = _social_post(title, p)

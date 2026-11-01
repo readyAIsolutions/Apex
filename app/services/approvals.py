@@ -35,14 +35,17 @@ async def create_approval(conn, tenant_id, action_type: str, payload: dict,
     return dict(row)
 
 
-async def get_approval(conn, tenant_id, approval_id: uuid.UUID) -> Optional[dict]:
+async def get_approval(conn, tenant_id, approval_id: uuid.UUID, lock: bool = False) -> Optional[dict]:
+    """lock=True takes a row lock (FOR UPDATE) so concurrent decide/execute serialize —
+    the second caller then sees the first caller's committed state, never a stale 'approved'."""
     row = await conn.fetchrow(
-        "SELECT * FROM approvals WHERE id = $1 AND tenant_id = $2", approval_id, tenant_id)
+        "SELECT * FROM approvals WHERE id = $1 AND tenant_id = $2" + (" FOR UPDATE" if lock else ""),
+        approval_id, tenant_id)
     return dict(row) if row else None
 
 
 async def decide(conn, tenant_id, approval_id: uuid.UUID, decision: str, actor: str) -> dict:
-    approval = await get_approval(conn, tenant_id, approval_id)
+    approval = await get_approval(conn, tenant_id, approval_id, lock=True)
     if approval is None:
         raise HTTPException(404, "Approval not found")
     if approval["decision"] != "pending":
@@ -64,22 +67,22 @@ async def decide(conn, tenant_id, approval_id: uuid.UUID, decision: str, actor: 
 async def execute_approval(conn, tenant_id, approval_id: uuid.UUID, actor: str,
                            executor) -> dict:
     """Run the adapter op ONLY if approved + hash intact + not expired + not executed."""
-    approval = await get_approval(conn, tenant_id, approval_id)
+    approval = await get_approval(conn, tenant_id, approval_id, lock=True)
     if approval is None:
         raise HTTPException(404, "Approval not found")
+    if approval["decision"] == "executed":        # terminal state wins over expiry (audit integrity)
+        return {"idempotent": True, **approval}
     if approval["expires_at"] < datetime.now(timezone.utc):
         await conn.execute("UPDATE approvals SET decision = 'expired' WHERE id = $1", approval_id)
         raise HTTPException(410, "Approval expired")
-    if approval["decision"] == "executed":
-        return {"idempotent": True, **approval}   # executor is idempotent
     if approval["decision"] != "approved":
         raise HTTPException(403, f"Not approved (state={approval['decision']})")
     stored = approval["payload"]
     if isinstance(stored, str):           # asyncpg returns jsonb as text
         try:
             stored = json.loads(stored)
-        except Exception:
-            raise HTTPException(403, "Approval payload corrupt")
+        except ValueError:
+            raise HTTPException(403, "Approval payload corrupt") from None
     if canonical_hash(stored) != approval["payload_hash"]:
         raise HTTPException(403, "Payload hash mismatch — approval invalidated (tamper detected)")
 

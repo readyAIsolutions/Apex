@@ -1,10 +1,9 @@
 """§7: POST /v1/questions/research — async question-intelligence job (editor+)."""
-import json
 
 from fastapi import APIRouter, Depends, status
 
 from app.auth import require_role
-from app.db import TenantScope, audit, get_pool
+from app.db import TenantScope, audit
 from app.schemas import AgentJobEnvelope, ResearchRequest
 from app.services import jobs as jobs_service
 

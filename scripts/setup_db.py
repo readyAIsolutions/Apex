@@ -12,7 +12,6 @@ Superuser password from env PGPASSWORD (default postgres).
 import asyncio
 import hashlib
 import os
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent

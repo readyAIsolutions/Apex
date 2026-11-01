@@ -8,7 +8,6 @@ same interface, zero server needed, so the vertical slice runs with no keys.
 import asyncio
 import random
 import xmlrpc.client
-from typing import Optional
 
 from app.integ.base import (
     AdapterResult, HealthResult, ProviderAdapter, ReconcileResult, WebhookOutcome,
@@ -172,7 +171,7 @@ class OdooCRMAdapter(ProviderAdapter):
             data = await self._find_by_ref(external_id)
             return ReconcileResult(ok=True, external_id=str(data["id"]) if data["id"] else external_id,
                                    found=bool(data["found"]))
-        except Exception as exc:
+        except Exception:
             return ReconcileResult(ok=False, external_id=None, found=False)
 
     async def handle_webhook(self, payload: dict) -> WebhookOutcome:

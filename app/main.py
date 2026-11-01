@@ -6,7 +6,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app import db
-from app.config import settings
 from app.routers import (
     actions, ads, agents, approvals, assets, campaigns, dashboard, health,
     leads, qa, questions, seo, webhooks,

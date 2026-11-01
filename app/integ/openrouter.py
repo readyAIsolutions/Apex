@@ -4,8 +4,6 @@ Model IDs are DATA (provider_routes table), never code. Cost telemetry is taken 
 the usage block; per-token pricing unknown for arbitrary models -> estimated with a
 warning rather than fabricated.
 """
-import asyncio
-from typing import Optional
 
 import httpx
 

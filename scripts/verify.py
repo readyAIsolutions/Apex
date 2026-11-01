@@ -21,7 +21,6 @@ import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -90,7 +89,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (15)", len(rows) == 15, ", ".join(r["file"] for r in rows))
+    check("migrations applied (16)", len(rows) == 16, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -181,6 +180,25 @@ async def main():
         except Exception as exc:
             check("expired approval rejected", "expired" in str(exc), str(exc))
 
+    # concurrency: two simultaneous executes of one approval must run the adapter ONCE
+    class CountingExec:
+        calls = 0
+
+        async def execute(self, op, payload):
+            CountingExec.calls += 1
+            await asyncio.sleep(0.3)
+            return await REG["local"].execute(op, payload)
+    async with app_scope(TENANT_AIMBEX) as conn:
+        ca = await appr.create_approval(conn, TENANT_AIMBEX, "local.noop", {"k": "race"})
+        await appr.decide(conn, TENANT_AIMBEX, ca["id"], "approve", "verify:approver")
+
+    async def _race():
+        async with app_scope(TENANT_AIMBEX) as c2:
+            return await appr.execute_approval(c2, TENANT_AIMBEX, ca["id"], "verify:race", CountingExec())
+    race = await asyncio.gather(_race(), _race(), return_exceptions=True)
+    check("concurrent execute runs the adapter exactly once", CountingExec.calls == 1,
+          f"adapter_calls={CountingExec.calls}")
+
     print("== 3. consent gate (§11 P0) ==")
     async with app_scope(TENANT_AIMBEX) as conn:
         opt = await conn.fetchrow(
@@ -261,8 +279,15 @@ async def main():
         r2 = client.post("/v1/webhooks/form", content=body, headers={"X-APEX-Signature": sig})
         check("webhook replay deduped", r2.json().get("duplicate") is True)
         rbad = client.post("/v1/webhooks/form", content=body, headers={"X-APEX-Signature": "deadbeef"})
-        check("bad signature rejected",
-              "invalid signature" in rbad.json().get("error", ""))
+        check("bad signature rejected (HTTP 401)",
+              rbad.status_code == 401 and "invalid signature" in rbad.text)
+        rten = client.post("/v1/webhooks/form", content=body,
+                           headers={"X-APEX-Signature": sig, "X-Tenant-Id": "not-a-uuid"})
+        check("malformed tenant header -> 422 not 500", rten.status_code == 422, str(rten.status_code))
+        rten2 = client.post("/v1/webhooks/form", content=body,
+                            headers={"X-APEX-Signature": sig,
+                                     "X-Tenant-Id": "99999999-9999-4999-8999-999999999999"})
+        check("unknown tenant rejected", rten2.status_code == 404, str(rten2.status_code))
 
         r401 = client.get("/v1/dashboard/overview")
         check("no key -> 401", r401.status_code == 401, str(r401.status_code))
@@ -860,6 +885,19 @@ async def main():
             "SELECT count(*) FROM creative_experiments WHERE tenant_id = $1", TENANT_AIMBEX)
         playbook_count = await conn.fetchval(
             "SELECT count(*) FROM conversion_playbooks WHERE tenant_id = $1", TENANT_AIMBEX)
+    async with app_scope(TENANT_AIMBEX) as conn:
+        pb_levels = {r["evidence_level"] for r in await conn.fetch(
+            "SELECT DISTINCT evidence_level FROM conversion_playbooks WHERE tenant_id = $1", TENANT_AIMBEX)}
+        dup_research = await conn.fetchval(
+            "SELECT count(*) - count(DISTINCT content_hash) FROM campaign_research WHERE tenant_id = $1",
+            TENANT_AIMBEX)
+        queued_ab = await conn.fetchval(
+            "SELECT count(*) FROM creative_experiments WHERE tenant_id=$1 AND status='queued'", TENANT_AIMBEX)
+    check("simulated research never yields 'verified' playbooks", "verified" not in pb_levels, str(pb_levels))
+    check("research is deduplicated across runs", dup_research == 0, f"dupes={dup_research}")
+    check("A/B designer queues the drafted variants", queued_ab >= 2, f"queued={queued_ab}")
+    check("evolution makes multiple angles per keeper",
+          len({v["angle"] for v in evo.get("variants", [])}) >= 2, str({v["angle"] for v in evo.get("variants", [])}))
     check("conversion-intel jobs all succeeded", all(conv_jobs.values()), str(conv_jobs))
     check("research stored + hype filtered to grade D",
           research_total >= 5 and gc.get("D", 0) >= 2,

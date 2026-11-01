@@ -5,7 +5,7 @@ RLS policies read that setting; unset context fails CLOSED (zero rows).
 """
 import json
 import uuid
-from typing import AsyncIterator, Optional
+from typing import Optional
 
 import asyncpg
 

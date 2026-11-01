@@ -49,9 +49,6 @@ async def main() -> int:
     from app.config import settings
     from app.db import TenantScope
     from app.integ import router as provider_router
-    from app.services import conversion_intel as ci
-    from app.services import jobs as jobs_service
-    from app.services import workflow_a as wfa
 
     r = aioredis.from_url(settings.redis_url)
     try:

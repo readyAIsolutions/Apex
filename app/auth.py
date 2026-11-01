@@ -6,6 +6,7 @@ no client-supplied tenant claim.
 """
 import hashlib
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional
 
@@ -52,7 +53,7 @@ async def resolve_principal(token: str) -> Principal:
             "FROM api_keys k JOIN tenants t ON t.id = k.tenant_id WHERE k.key_hash = $1", h)
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
-    if row["expires_at"] is not None and row["expires_at"] < __import__("datetime").datetime.now(__import__("datetime").timezone.utc):
+    if row["expires_at"] is not None and row["expires_at"] < datetime.now(timezone.utc):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key expired")
     if row["tenant_status"] != "active":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Tenant not active")
