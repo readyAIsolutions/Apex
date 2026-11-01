@@ -17,6 +17,7 @@ class AgentJobEnvelope(BaseModel):
     agent: str
     goal: str
     input_refs: list[str] = []
+    input: dict[str, Any] = Field(default_factory=dict)
     constraints: EnvelopeConstraints = EnvelopeConstraints()
     approval_policy: str = "draft_only"   # draft_only | gated
     idempotency_key: str
@@ -70,6 +71,11 @@ class ResearchRequest(BaseModel):
     locale: str = "CA-AB"
     scope: dict[str, Any] = {}
     cost_cap_usd: float = Field(default=0.20, ge=0)
+
+
+class SeoAuditIn(BaseModel):
+    url: Optional[str] = None
+    html: Optional[str] = None
 
 
 class AssetCreate(BaseModel):

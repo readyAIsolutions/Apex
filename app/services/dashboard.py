@@ -26,6 +26,14 @@ async def overview(conn, tenant_id) -> dict:
     spend_usd = round(spend_minor / 100, 2)
     cac = round(spend_usd / qualified, 2) if qualified else None
 
+    wins_by_source = [dict(r) for r in await conn.fetch(
+        "SELECT source, count(*)::int AS wins FROM opportunity_attribution "
+        "WHERE tenant_id = $1 GROUP BY source ORDER BY wins DESC", tenant_id)]
+    wins_by_campaign = [dict(r) for r in await conn.fetch(
+        "SELECT COALESCE(c.name, 'n/a') AS campaign, count(*)::int AS wins "
+        "FROM opportunity_attribution a LEFT JOIN campaigns c ON c.id = a.campaign_id "
+        "WHERE a.tenant_id = $1 GROUP BY c.name ORDER BY wins DESC", tenant_id)]
+
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
         "spend_usd": spend_usd,
@@ -36,6 +44,8 @@ async def overview(conn, tenant_id) -> dict:
         "wins": wins,
         "recognized_revenue_usd": float(revenue or 0),
         "contribution_margin_usd": float(margin or 0),
+        "wins_by_source": wins_by_source,
+        "wins_by_campaign": wins_by_campaign,
         "caveats": [
             "attribution: first-touch UTM only",
             "phone/offline lead join not yet reconciled",

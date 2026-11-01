@@ -9,7 +9,7 @@ from app import db
 from app.config import settings
 from app.routers import (
     actions, agents, approvals, assets, campaigns, dashboard, health,
-    leads, questions, webhooks,
+    leads, questions, seo, webhooks,
 )
 
 log = logging.getLogger("apex")
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(leads.router, prefix="/v1")
     app.include_router(dashboard.router, prefix="/v1")
     app.include_router(questions.router, prefix="/v1")
+    app.include_router(seo.router, prefix="/v1")
     app.include_router(campaigns.router, prefix="/v1")
     app.include_router(agents.router, prefix="/v1")
     app.include_router(assets.router, prefix="/v1")

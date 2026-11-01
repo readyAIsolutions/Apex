@@ -147,3 +147,41 @@ def test_dev_demand_deterministic_and_honest():
     keys_a = [r["evidence_key"] for r in a]
     keys_b = [r["evidence_key"] for r in b]
     assert keys_a != keys_b  # fresh evidence per run, deterministic shape
+
+
+# ----------------------------------------------------------------------------
+# Deterministic on-page SEO audit
+# ----------------------------------------------------------------------------
+GOOD_HTML = (
+    "<!doctype html><html><head>"
+    "<title>AI Receptionist for Restoration Firms in Edmonton</title>"
+    "<meta name='description' content='AI receptionist, missed-call recovery and CRM follow-up "
+    "built for restoration and contracting firms in Edmonton and Lloydminster.'>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<link rel='canonical' href='https://aimbex.example/ai-receptionist'>"
+    '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Service"}</script>'
+    "</head><body><h1>Never Miss a Qualified Lead</h1>"
+    "<img src='/call.jpg' alt='AI answering a call'>"
+    + ("<p>word</p>" * 130) +
+    "</body></html>"
+)
+
+
+def test_audit_seo_good_page():
+    from app.services.seo import audit_seo
+    res = audit_seo(GOOD_HTML, "https://aimbex.example/ai-receptionist")
+    assert res["ok_all"] is True, res["checks"]
+    assert res["title"].startswith("AI Receptionist")
+
+
+def test_audit_seo_flags_problems():
+    from app.services.seo import audit_seo
+    bad = ("<html><body><img src='/x.png'><p>tiny</p></body></html>")
+    res = audit_seo(bad, url="https://aimbex.example/broken")
+    checks = {c["field"]: c["ok"] for c in res["checks"]}
+    assert checks["title"] is False
+    assert checks["h1"] is False            # no h1
+    assert checks["structured_data.jsonld"] is False
+    assert checks["img.alt"] is False       # missing alt
+    assert checks["noindex"] is True        # default is fine (no noindex present)
+    assert any("fix" in a for a in res["recommended_next_actions"])

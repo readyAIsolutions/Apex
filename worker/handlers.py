@@ -150,8 +150,67 @@ async def crm_sync(conn, job, payload) -> AgentJobResult:
                           confidence=1.0)
 
 
+async def seo_audit(conn, job, payload) -> AgentJobResult:
+    """§4 SEO Auditor: deterministic on-page audit of landing-page HTML (or a URL)."""
+    from app.services.seo import audit_seo
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    html = (inp or {}).get("input", {}).get("html")
+    url = (inp or {}).get("input", {}).get("url", "")
+    if not html and url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                html = r.text[:500_000]
+        except Exception as exc:
+            return AgentJobResult(
+                status="not_configured",
+                warnings=[f"could not fetch {url}: {exc}"],
+                recommended_next_actions=["provide html directly or a reachable url"])
+    res = audit_seo(html or "", url)
+    return AgentJobResult(status="succeeded", structured_output=res, confidence=0.9,
+                          recommended_next_actions=res["recommended_next_actions"])
+
+
+async def attribution(conn, job, payload) -> AgentJobResult:
+    """§10 reconcile: join closed-won opportunities to their original first-touch
+    lead event (source/campaign). Confidence is honest and labelled first-touch."""
+    won = await conn.fetch(
+        "SELECT id, contact_id, crm_external_id FROM opportunities "
+        "WHERE tenant_id = $1 AND stage = 'won'", payload["tenant_id"])
+    done = unknown = 0
+    for o in won:
+        le = await conn.fetchrow(
+            "SELECT source, campaign_id, utm_json FROM lead_events "
+            "WHERE tenant_id = $1 AND contact_id = $2 ORDER BY occurred_at ASC LIMIT 1",
+            payload["tenant_id"], o["contact_id"])
+        if le is None:
+            unknown += 1
+            continue
+        utm = le["utm_json"]
+        await conn.execute(
+            "INSERT INTO opportunity_attribution "
+            "(tenant_id, opportunity_id, contact_id, source, campaign_id, utm_json, confidence) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7) "
+            "ON CONFLICT (tenant_id, opportunity_id) DO UPDATE SET "
+            "source=EXCLUDED.source, campaign_id=EXCLUDED.campaign_id, "
+            "utm_json=EXCLUDED.utm_json, confidence=EXCLUDED.confidence",
+            payload["tenant_id"], o["id"], o["contact_id"], le["source"], le["campaign_id"],
+            json.dumps(utm) if isinstance(utm, dict) else utm, "first-touch")
+        done += 1
+    return AgentJobResult(
+        status="succeeded", structured_output={"attributed": done, "unknown": unknown},
+        confidence=0.9,
+        warnings=["first-touch UTM only; phone/offline join pending (>= 1 unknown may hide revenue)"])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
+    "seo_auditor": seo_audit,
+    "attribution": attribution,
     "crm_sync": crm_sync,
 }

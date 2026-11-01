@@ -37,6 +37,15 @@ os.environ.setdefault("BOOTSTRAP_KEYS", "analyst:apex_dev_analyst_key,executor:a
 TENANT_AIMBEX = uuid.UUID("11111111-1111-4111-8111-111111111111")
 TENANT_B = uuid.UUID("22222222-2222-4222-8222-222222222222")
 
+GOOD_HTML = ("<title>AI Receptionist for Restoration Firms in Edmonton</title>"
+             "<meta name='description' content='AI receptionist and missed-call recovery for "
+             "restoration and contracting firms in Edmonton and Lloydminster, Alberta.'>"
+             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+             "<link rel='canonical' href='https://aimbex.example/ai-receptionist'>"
+             '<script type="application/ld+json">{"@type":"Service"}</script>'
+             "<body><h1>Never Miss a Qualified Lead</h1>"
+             + ("<p>word</p>" * 130) + "</body>")
+
 PASS, FAIL = [], []
 
 
@@ -78,7 +87,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (8)", len(rows) == 8, ", ".join(r["file"] for r in rows))
+    check("migrations applied (9)", len(rows) == 9, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -209,6 +218,14 @@ async def main():
               str(dash["cost_per_qualified_lead"]))
         check("dashboard caveats present", len(dash["caveats"]) >= 1)
 
+        rseo_low = client.post("/v1/seo/audit", headers={"Authorization": "Bearer apex_dev_analyst_key"},
+                               json={"html": GOOD_HTML})
+        check("seo audit denied to analyst (editor+)", rseo_low.status_code == 403, str(rseo_low.status_code))
+        rseo = client.post("/v1/seo/audit", headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                           json={"html": GOOD_HTML})
+        check("seo audit endpoint returns checks",
+              rseo.status_code == 200 and rseo.json().get("ok_all") is True, f"HTTP {rseo.status_code}")
+
         rjob = client.post("/v1/agents/jobs",
                            headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
                            json={"agent": "crm_sync", "goal": "sync contacts",
@@ -291,6 +308,42 @@ async def main():
         print(f"      - {c['intent']:13s} n={c['count']:3d}  e.g. \"{c['questions'][0]}\"")
     for w in wfa["warnings"]:
         print(f"      warning: {w}")
+
+    print("== 8. SEO auditor + attribution reconcile (§4/§10) ==")
+    import redis.asyncio as aioredis
+    from app.schemas import AgentJobEnvelope
+    from app.services import jobs as jobs_service
+    r = aioredis.from_url(os.environ["REDIS_URL"])
+    try:
+        async with app_scope(TENANT_AIMBEX) as conn:
+            seo_job = await jobs_service.create_job(
+                conn, TENANT_AIMBEX,
+                AgentJobEnvelope(agent="seo_auditor", goal="Audit the AI receptionist landing page",
+                                 input={"html": GOOD_HTML},
+                                 idempotency_key=f"verify:seo:{uuid.uuid4().hex[:8]}"), redis=r)
+            att_job = await jobs_service.create_job(
+                conn, TENANT_AIMBEX,
+                AgentJobEnvelope(agent="attribution", goal="Reconcile closed-won to original source",
+                                 idempotency_key=f"verify:attr:{uuid.uuid4().hex[:8]}"), redis=r)
+            seo_id, att_id = seo_job["id"], att_job["id"]
+        n3 = await run_once()
+        async with app_scope(TENANT_AIMBEX) as conn:
+            seo_row = await conn.fetchrow(
+                "SELECT state, output_json FROM agent_jobs WHERE id = $1", UUID(seo_id))
+            seo_res = json.loads(seo_row["output_json"]) if seo_row and seo_row["output_json"] else {}
+            att_rows = await conn.fetch(
+                "SELECT source, campaign_id FROM opportunity_attribution WHERE tenant_id = $1",
+                TENANT_AIMBEX)
+    finally:
+        await r.aclose()
+    check("seo audit job completed", seo_row is not None and seo_row["state"] == "succeeded",
+          seo_row["state"] if seo_row else "missing")
+    check("seo job produced checks", bool(seo_res.get("structured_output", {}).get("checks")),
+          f"ok_all={seo_res.get('structured_output', {}).get('ok_all')}")
+    check("attribution job ran", n3 >= 1, f"jobs drained={n3}")
+    check("attribution joined won deal to source",
+          bool(att_rows) and any(r["source"] == "ad" for r in att_rows),
+          f"{len(att_rows)} attributed: {[r['source'] for r in att_rows]}")
 
     await migrator.close()
     return len(FAIL)
