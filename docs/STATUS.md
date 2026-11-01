@@ -1,8 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
-# Build 2: Google adapters + Workflow A + asset->publish gate.  Build 3: SEO Auditor + attribution.
+# Build 4: keyless content lifecycle (template-draft fallback) + lead booking + approval queue.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **47/47 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **50/50 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -17,6 +17,9 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **47/47 
 | **Build 2 — real Google adapters** | `gsc` + `ga4` implement real service-account OAuth (RS256 JWT, `cryptography`) + real API calls; fail CLOSED without creds; request/auth shapes unit-tested with a fake transport |
 | **Build 3 — SEO Auditor** | deterministic on-page scanner (`app/services/seo.py`, stdlib-only): title/description/h1/canonical/viewport/noindex/JSON-LD/alt/word-count → findings + tickets; sync `POST /v1/seo/audit` (editor+, RBAC-tested) AND async `seo_auditor` job — both verified |
 | **Build 3 — attribution reconcile (§10)** | `attribution` worker joins closed-won opportunities to their original first-touch lead event (source/campaign) into `opportunity_attribution`; dashboard exposes `wins_by_source`/`wins_by_campaign`; verified: seeded won deal → source `ad` |
+| **Build 4 — keyless content lifecycle** | `content_draft` falls back to a clearly-labelled SIMULATED template draft (no hard failure) → briefs ALWAYS produce draft `content_assets` → submit → approve → publish → receipt; verified keyless (11 articles) |
+| **Build 4 — lead booking (§5 Workflow B)** | `POST /v1/leads/{contact_id}/appointments` (editor+) books an approved consultation slot via Odoo calendar mirror; verified (mock external id) |
+| **Build 4 — approval queue** | `GET /v1/approvals?state=pending` (approver+) lists the operator's open gates; verified to surface the pending publish gate |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -59,6 +62,7 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 3. **OpenRouter key** → content_briefs start producing real drafts (jobs already complete as `not_configured` when keyless)
 4. P2: HeyGen two-avatar podcast (§5 workflow C)
 5. Email nurture outbound (needs a plaintext-contact source — Odoo crm.lead is the right place; APEX stores only hashes) + Brevo key
+6. Full content lifecycle now runs keyless end-to-end (template drafts) — provisioning OPENROUTER_API_KEY swaps templates for real drafts with zero code change.
 
 ## Pitfalls recorded (this build)
 

@@ -21,7 +21,9 @@ import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import UUID
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -181,6 +183,16 @@ async def main():
                                                       email="dup@example.com"))
         check("idempotent duplicate lead", dup["processed"] is False and dup["duplicate"] is True)
 
+        # Workflow B booking milestone: book a consultation slot (Odoo calendar mirror)
+        opp_id = await conn.fetchval(
+            "SELECT id FROM opportunities WHERE tenant_id = $1 AND contact_id = $2 "
+            "ORDER BY created_at DESC LIMIT 1", TENANT_AIMBEX, UUID(outcome["contact_id"]))
+        appt = await leads_svc.schedule_appointment(
+            conn, TENANT_AIMBEX, UUID(outcome["contact_id"]), opp_id,
+            datetime.now(timezone.utc) + timedelta(days=1), crm_adapter=odoo)
+        check("appointment booked via Odoo calendar (mock)",
+              bool(appt.get("calendar_external_id")), str(appt.get("calendar_external_id")))
+
     print("== 5. clustering (pure) ==")
     clusters = cluster_by_intent(["FLOOD damage emergency", "flood damage emergency", "cost of AI"])
     by_intent = {c["intent"]: c for c in clusters}
@@ -248,6 +260,11 @@ async def main():
                             headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
                             json={"platform": "site"})
         gate_approval_id = sub_r.json()["approval_id"]
+        plist = client.get("/v1/approvals?state=pending",
+                           headers={"Authorization": "Bearer apex_dev_approver_key"})
+        check("approval queue lists pending gate",
+              plist.status_code == 200 and any(a["action_type"].startswith("publish:") for a in plist.json()),
+              str(plist.status_code))
         apr_r = client.post(f"/v1/approvals/{gate_approval_id}/decision",
                             headers={"Authorization": "Bearer apex_dev_approver_key"},
                             json={"decision": "approve"})
@@ -263,7 +280,6 @@ async def main():
               f"HTTP {exec_r.status_code}: {exec_r.text[:160]}")
 
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
-    from uuid import UUID
     from worker.run import run_once
     n = await run_once()
     check("worker processed job", n >= 1, f"{n} job(s)")
@@ -293,6 +309,9 @@ async def main():
         async with app_scope(TENANT_AIMBEX) as conn:
             q_total = await conn.fetchval(
                 "SELECT count(*) FROM customer_questions WHERE tenant_id = $1", TENANT_AIMBEX)
+            article_count = await conn.fetchval(
+                "SELECT count(*) FROM content_assets WHERE tenant_id = $1 AND kind = 'article'",
+                TENANT_AIMBEX)
             drafts = await conn.fetch(
                 "SELECT id, state FROM agent_jobs WHERE tenant_id = $1 AND agent = 'content_writer' LIMIT 10",
                 TENANT_AIMBEX)
@@ -302,8 +321,9 @@ async def main():
     check("question store populated", q_total >= 25, f"store={q_total}")
     check("top clusters produced", len(wfa["top_clusters"]) >= 1, f"clusters={len(wfa['top_clusters'])}")
     check("worker drained workflow jobs", n2 >= 1, f"drained={n2}")
-    check("brief jobs completed (keyless = not_configured)",
+    check("brief jobs completed (keyless = template fallback)",
           bool(drafts) and all(d["state"] == "succeeded" for d in drafts), f"{len(drafts)} drafts ok")
+    check("briefs produced draft content assets", article_count >= 1, f"articles={article_count}")
     for c in wfa["top_clusters"]:
         print(f"      - {c['intent']:13s} n={c['count']:3d}  e.g. \"{c['questions'][0]}\"")
     for w in wfa["warnings"]:

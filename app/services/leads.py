@@ -106,8 +106,8 @@ async def schedule_appointment(conn, tenant_id, contact_id: uuid.UUID, opportuni
     if crm_adapter is not None:
         r = await crm_adapter.execute("create_appointment", {
             "contact_id": str(contact_id), "start": starts_at.isoformat()})
-        if r.ok:
-            ext = r.data.get("id")
+        if r.ok and r.data.get("id"):
+            ext = str(r.data["id"])
     row = await conn.fetchrow(
         "INSERT INTO appointments (tenant_id, contact_id, opportunity_id, starts_at, calendar_external_id) "
         "VALUES ($1, $2, $3, $4, $5) RETURNING *",

@@ -1,5 +1,6 @@
 """Pydantic contracts (§3 agent envelope, §7 API payloads)."""
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -52,6 +53,10 @@ class ConsentRecordIn(BaseModel):
     basis: str = "explicit"
     status: str = "granted"           # granted | opted_out
     proof_ref: Optional[str] = None
+
+
+class AppointmentCreate(BaseModel):
+    starts_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ApprovalDecisionIn(BaseModel):

@@ -95,10 +95,25 @@ async def research_questions(conn, job, payload) -> AgentJobResult:
         recommended_next_actions=["draft answer for highest-count cluster", "submit drafts for QA"])
 
 
+def _template_draft(topic: str) -> str:
+    """Deterministic fallback so the content lifecycle runs keyless (guaranteed
+    output ladder). Clearly labelled SIMULATED — real LLM drafts replace it once
+    OPENROUTER_API_KEY is set."""
+    return (
+        "TEMPLATE DRAFT (SIMULATED — replace via OPENROUTER_API_KEY when provisioned)\n\n"
+        f"Topic: {topic}\n\n"
+        "Headline: Never Miss a Qualified Lead Again\n\n"
+        "Every missed call is a missed estimate. Restoration and contractor firms in "
+        "Lloydminster and Edmonton lose work when the phone rings after hours or during "
+        "the next emergency. An AI receptionist answers instantly, captures the details, "
+        "and books the follow-up so no qualified lead falls through the cracks.\n\n"
+        "Book a consultation to see your own call-handling economics.\n"
+        "(No guaranteed-ROI claims are made in this draft.)")
+
+
 async def content_draft(conn, job, payload) -> AgentJobResult:
-    """Draft via routed LLM; health-check first so a keyless box stays green
-    (job completes as not_configured with honest warnings). Creates the draft
-    content_assets row for the human gate."""
+    """Draft via routed LLM, with a SIMULATED template fallback so the pipeline
+    always produces a draft asset (free -> paid ladder; no hard keyless failure)."""
     topic = payload.get("goal") or "AI receptionist for restoration firms"
     adapter = None
     try:
@@ -106,27 +121,38 @@ async def content_draft(conn, job, payload) -> AgentJobResult:
                                              tenant_id=uuid.UUID(payload["tenant_id"]))
     except Exception:
         adapter = None
-    if adapter is None or not (await adapter.health_check()).ok:
-        return AgentJobResult(
-            status="not_configured", structured_output=None,
-            warnings=["no configured provider for draft.fast — draft skipped (keyless)"],
-            recommended_next_actions=["set OPENROUTER_API_KEY", "add provider_routes row draft.fast"])
-    prompt = (f"Write a 400-word factual draft for topic: {topic}. "
-              "No guaranteed-ROI claims. Audience: restoration/contractor firms in "
-              "Lloydminster/Edmonton. Plain marketing copy, no invented statistics.")
-    result = await adapter.execute("chat", {"prompt": prompt})
-    if not result.ok:
-        return AgentJobResult(status="not_configured", warnings=result.warnings,
-                              cost_usd=result.cost_usd)
+
+    draft = None
+    simulated = False
+    warnings = []
+    cost = 0.0
+    if adapter is not None and (await adapter.health_check()).ok:
+        prompt = (f"Write a 400-word factual draft for topic: {topic}. "
+                  "No guaranteed-ROI claims. Audience: restoration/contractor firms in "
+                  "Lloydminster/Edmonton. Plain marketing copy, no invented statistics.")
+        result = await adapter.execute("chat", {"prompt": prompt})
+        cost = result.cost_usd
+        if result.ok:
+            draft = result.data.get("output")
+            warnings += result.warnings
+        else:
+            warnings += result.warnings
+    if not draft:
+        draft = _template_draft(topic)
+        simulated = True
+        warnings.append("SIMULATED template draft — set OPENROUTER_API_KEY for a real LLM draft")
+
     asset = await conn.fetchrow(
-        "INSERT INTO content_assets (tenant_id, kind, status) VALUES ($1, 'article', 'draft') "
-        "RETURNING id", payload["tenant_id"])
+        "INSERT INTO content_assets (tenant_id, kind, status, object_uri) "
+        "VALUES ($1, 'article', 'draft', $2) RETURNING id",
+        payload["tenant_id"], f"draft://template/{topic[:60]}")
     return AgentJobResult(
         status="succeeded",
         structured_output={"topic": topic, "asset_id": str(asset["id"]),
-                           "draft": result.data.get("output")},
-        confidence=0.5, cost_usd=result.cost_usd, warnings=result.warnings,
-        recommended_next_actions=["run fact-check QA", "POST /v1/assets/{id}/submit for approval"])
+                           "draft": draft, "simulated": simulated},
+        confidence=0.4 if simulated else 0.5, cost_usd=cost, warnings=warnings,
+        recommended_next_actions=["run fact-check QA",
+                                  f"POST /v1/assets/{asset['id']}/submit for approval"])
 
 
 async def crm_sync(conn, job, payload) -> AgentJobResult:
