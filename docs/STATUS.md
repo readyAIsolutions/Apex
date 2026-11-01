@@ -1,8 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
-# Build 10: Workflow C — two-avatar podcast pipeline (permission gate -> storyboard -> QA -> publish).
+# Build 11: sales funnel tail — proposal -> signed engagement -> closed-won with economics.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **87/87 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **96/96 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -30,6 +30,7 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **87/87 
 | **Build 9 — Email/Retention (§3 §5 Workflow E)** | `email_nurture` agent: opt-out stops automation at CREATE (no approval/send); granted contact gets a `send:email` human-gated approval; the executor **re-checks consent at EXECUTION time** (409 on revocation between draft and send — CASL-safe); keyless send fails CLOSED (brevo: no key / no plaintext recipient) with the attempt recorded. All five paths verified |
 | **Build 9 — spend intake (§10)** | `POST /v1/campaigns/{id}/spend` reconciles provider-reported spend idempotently (unique (campaign,date,provider_ref), ON CONFLICT upsert) → dashboard reflects it (405.90 after ingest) |
 | **Build 10 — podcast pipeline (Workflow C §5 P2)** | `podcast_producer` agent: **likeness+voice permission hard stop** (no refs → blocked), script compliance QA (banned claims → blocked), deterministic storyboard + render manifest (full + 3 shorts, SIMULATED), human `publish:podcast` approval → local executor receipt → asset published. All six paths verified |
+| **Build 11 — sales funnel tail (§9)** | `proposal_draft` (deterministic SIMULATED proposal, valued from the opportunity) → `send:proposal` approval → receipt (platform proposal); `close_engagement` **refuses to accept without a published proposal** (guard at creation AND at execution); `accept:engagement` marks the opportunity **won with actual_value + margin** + audit. Full journey now: webhook → booked → proposal → signed → won → dashboard economics. Verified end-to-end (worth 4500 / margin 2700) |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -71,7 +72,7 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 2. **Real Odoo 17** (docker-compose `--profile crm`), add `apex_external_ref` field on `crm.lead`, set `ODOO_MOCK=0`
 3. **OpenRouter key** → content_briefs start producing real drafts (jobs already complete as `not_configured` when keyless)
 4. P2: HeyGen two-avatar podcast — pipeline is built & verified keyless (permission gate, storyboard, QA, approval, receipt); real renders need HEYGEN_API_KEY/RUNWAY_API_KEY + avatar rights refs. Provider adapters heygen.py/runway.py already exist (fails closed).
-5. Email nurture is wired end-to-end; real sends need BREVO_API_KEY + a plaintext-recipient source (Odoo crm.lead is the right place — APEX stores only hashes by design).
+5. Real proposal delivery/e-sign: the funnel tail is verified keyless (local receipts); swap `send:proposal` route to a document/e-sign adapter when provisioned.
 6. Full content lifecycle now runs keyless end-to-end (template drafts) — provisioning OPENROUTER_API_KEY swaps templates for real drafts with zero code change.
 7. Recommend-only spend optimizer + QA are wired; optimizer also guards budget increases now. Remaining P1 financing: connect a real GA4/Ads spend feed (needs a service-account key) so `campaign_spend_daily` is reconciled from providers instead of demo rows.
 8. **OPS WARNING — this box's root disk is ~0.7% free (3.3G/468G).** `ops_check.py` alerts on it. Do not grow backups/venv further; free disk before more builds (other projects on the box occupy the space).
