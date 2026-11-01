@@ -402,6 +402,85 @@ async def podcast_producer(conn, job, payload) -> AgentJobResult:
                                   "replace SIMULATED render with HeyGen/Runway output when credentialed"])
 
 
+def _proposal_template(value_usd: float) -> str:
+    """Deterministic proposal draft (SIMULATED — replace with LLM/approved scope)."""
+    return (
+        "PROPOSAL DRAFT (SIMULATED — replace with approved scope/LLM draft)\n\n"
+        "Engagement: AI receptionist + missed-call recovery (restoration services)\n"
+        f"Scoped fee: ${value_usd:,.2f}\n"
+        "Deliverables: 24/7 AI answering, CRM follow-up, booking, weekly report\n"
+        "Terms: monthly retainer; cancel anytime.\n"
+        "(No outcome promises and no uncited figures are made in this draft.)")
+
+
+async def proposal_draft(conn, job, payload) -> AgentJobResult:
+    """§9 sales funnel: draft a proposal for an open opportunity -> send:proposal approval."""
+    from app.services import approvals as approvals_service
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    opp_id = (inp or {}).get("input", {}).get("opportunity_id")
+    if not opp_id:
+        return AgentJobResult(status="not_configured", warnings=["no opportunity_id — pass input.opportunity_id"])
+    try:
+        oid = uuid.UUID(opp_id)
+    except ValueError:
+        return AgentJobResult(status="failed", structured_output={"error": "invalid opportunity_id"})
+    opp = await conn.fetchrow(
+        "SELECT id, contact_id, projected_value FROM opportunities WHERE id = $1", oid)
+    if opp is None:
+        return AgentJobResult(status="failed", structured_output={"error": "opportunity not found"},
+                              warnings=["scoped to own tenant; cannot draft for another tenant"])
+    value = float(opp["projected_value"] or 0)
+    asset = await conn.fetchrow(
+        "INSERT INTO content_assets (tenant_id, kind, status) "
+        "VALUES ($1,'proposal','draft') RETURNING id", payload["tenant_id"])
+    approval = await approvals_service.create_approval(
+        conn, payload["tenant_id"], "send:proposal",
+        {"asset_id": str(asset["id"]), "opportunity_id": str(oid),
+         "contact_id": str(opp["contact_id"]), "value_usd": value})
+    return AgentJobResult(
+        status="succeeded",
+        structured_output={"approval_id": str(approval["id"]), "asset_id": str(asset["id"]),
+                           "opportunity_id": str(oid), "value_usd": value,
+                           "proposal": _proposal_template(value), "simulated": True},
+        recommended_next_actions=["approve + execute send:proposal (receipt)",
+                                  "then close_engagement with the published proposal"])
+
+
+async def close_engagement(conn, job, payload) -> AgentJobResult:
+    """§9 signed engagement: accept:engagement approval — only when the proposal is PUBLISHED."""
+    from app.services import approvals as approvals_service
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    i = (inp or {}).get("input", {})
+    opp_id, asset_id = i.get("opportunity_id"), i.get("proposal_asset_id")
+    actual, margin = i.get("actual_value_usd"), i.get("margin_usd")
+    if not (opp_id and asset_id and actual is not None and margin is not None):
+        return AgentJobResult(status="not_configured",
+                              warnings=["pass input.opportunity_id + proposal_asset_id + actual_value_usd + margin_usd"])
+    try:
+        oid, aid = uuid.UUID(opp_id), uuid.UUID(asset_id)
+    except ValueError:
+        return AgentJobResult(status="failed", structured_output={"error": "bad uuid input"})
+    published = await conn.fetchval(
+        "SELECT 1 FROM publications WHERE tenant_id = $1 AND asset_id = $2",
+        payload["tenant_id"], aid)
+    if not published:
+        return AgentJobResult(
+            status="succeeded", structured_output={"blocked": "proposal_not_published"},
+            warnings=["engagement cannot be accepted: no published proposal receipt for the asset"],
+            recommended_next_actions=["run proposal_draft -> approve -> execute first"])
+    approval = await approvals_service.create_approval(
+        conn, payload["tenant_id"], "accept:engagement",
+        {"asset_id": str(aid), "opportunity_id": str(oid),
+         "actual_value_usd": float(actual), "margin_usd": float(margin)})
+    return AgentJobResult(status="succeeded",
+                          structured_output={"approval_id": str(approval["id"]), "blocked": None},
+                          recommended_next_actions=["approve + execute to win the opportunity"])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
@@ -411,5 +490,7 @@ HANDLERS = {
     "paid_media": paid_media,
     "email_nurture": email_nurture,
     "podcast_producer": podcast_producer,
+    "proposal_draft": proposal_draft,
+    "close_engagement": close_engagement,
     "crm_sync": crm_sync,
 }

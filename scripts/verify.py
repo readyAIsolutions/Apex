@@ -90,7 +90,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (11)", len(rows) == 11, ", ".join(r["file"] for r in rows))
+    check("migrations applied (12)", len(rows) == 12, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -624,6 +624,93 @@ async def main():
     async with app_scope(TENANT_AIMBEX) as conn:
         ast = await conn.fetchval("SELECT status FROM content_assets WHERE id = $1", UUID(pod_asset))
     check("podcast asset flipped to published", ast == "published", str(ast))
+
+    print("== 9d. Sales funnel tail (proposal -> signed -> won, §9) ==")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        w_opp = await conn.fetchval(
+            "SELECT o.id FROM opportunities o JOIN contacts c ON c.id = o.contact_id "
+            "WHERE c.tenant_id = $1 AND c.full_name = 'Webhook Lead' AND o.stage = 'new' "
+            "ORDER BY o.created_at DESC LIMIT 1", TENANT_AIMBEX)
+        fres = await leads_svc.ingest_lead(
+            conn, TENANT_AIMBEX,
+            LeadEventIn(source="webform", event_key=f"verify:funnel:{uuid.uuid4().hex[:8]}",
+                        full_name="Funnel Test B",
+                        email=f"funnel{uuid.uuid4().hex[:6]}@example.com"), crm_adapter=None)
+        f_opp = await conn.fetchval(
+            "SELECT id FROM opportunities WHERE contact_id = $1 "
+            "ORDER BY created_at DESC LIMIT 1", UUID(fres["contact_id"]))
+    check("open opportunities available for funnel test", bool(w_opp) and bool(f_opp))
+    with TestClientCompat(create_app()) as client:
+        s1 = client.post("/v1/agents/jobs",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"agent": "proposal_draft", "goal": "Draft proposal",
+                               "input": {"opportunity_id": str(w_opp)},
+                               "idempotency_key": f"verify:s1:{uuid.uuid4().hex[:8]}"})
+        s2 = client.post("/v1/agents/jobs",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"agent": "close_engagement", "goal": "Close without proposal",
+                               "input": {"opportunity_id": str(f_opp),
+                                         "proposal_asset_id": "00000000-0000-4000-8000-000000000000",
+                                         "actual_value_usd": 4000, "margin_usd": 2000},
+                               "idempotency_key": f"verify:s2:{uuid.uuid4().hex[:8]}"})
+        s1_id = s1.json().get("id") if s1.status_code == 202 else None
+        s2_id = s2.json().get("id") if s2.status_code == 202 else None
+    check("funnel jobs enqueued", bool(s1_id) and bool(s2_id))
+    n5 = await run_once()
+    async with app_scope(TENANT_AIMBEX) as conn:
+        r1 = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1", UUID(s1_id))
+        r2 = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1", UUID(s2_id))
+        o1 = json.loads(r1["output_json"])["structured_output"]
+        o2 = json.loads(r2["output_json"])["structured_output"]
+        s1_appr = o1.get("approval_id")
+        prop_asset = o1.get("asset_id")
+    check("close without published proposal is blocked",
+          o2.get("blocked") == "proposal_not_published" and not o2.get("approval_id"),
+          str(o2)[:90])
+    check("proposal drafted (simulated, valued)", bool(s1_appr) and o1.get("simulated") is True
+          and o1.get("value_usd", 0) >= 0, f"value={o1.get('value_usd')}")
+    with TestClientCompat(create_app()) as client:
+        dp = client.post(f"/v1/approvals/{s1_appr}/decision",
+                         headers={"Authorization": "Bearer apex_dev_approver_key"},
+                         json={"decision": "approve"})
+        ep = client.post(f"/v1/actions/{s1_appr}/execute",
+                         headers={"Authorization": "Bearer apex_dev_executor_key"})
+        epj = ep.json() if ep.status_code == 200 else {}
+        check("proposal published with receipt",
+              ep.status_code == 200 and epj.get("receipt", {}).get("platform") == "proposal",
+              f"HTTP {ep.status_code}: {str(epj.get('receipt'))[:80]}")
+    with TestClientCompat(create_app()) as client:
+        s3 = client.post("/v1/agents/jobs",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"agent": "close_engagement", "goal": "Accept signed engagement",
+                               "input": {"opportunity_id": str(w_opp),
+                                         "proposal_asset_id": str(prop_asset),
+                                         "actual_value_usd": 4500, "margin_usd": 2700},
+                               "idempotency_key": f"verify:s3:{uuid.uuid4().hex[:8]}"})
+        s3_id = s3.json().get("id") if s3.status_code == 202 else None
+    check("close-after-publish job enqueued", bool(s3_id))
+    n6 = await run_once()
+    async with app_scope(TENANT_AIMBEX) as conn:
+        r3 = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1", UUID(s3_id))
+        s3_appr = json.loads(r3["output_json"])["structured_output"].get("approval_id")
+    check("signed engagement approval created", bool(s3_appr))
+    with TestClientCompat(create_app()) as client:
+        da = client.post(f"/v1/approvals/{s3_appr}/decision",
+                         headers={"Authorization": "Bearer apex_dev_approver_key"},
+                         json={"decision": "approve"})
+        ea = client.post(f"/v1/actions/{s3_appr}/execute",
+                         headers={"Authorization": "Bearer apex_dev_executor_key"})
+        eaj = ea.json() if ea.status_code == 200 else {}
+        check("engagement executed -> opportunity won",
+              ea.status_code == 200 and eaj.get("win", {}).get("actual_value_usd") == 4500,
+              f"HTTP {ea.status_code}: {str(eaj.get('win'))[:80]}")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        row = await conn.fetchrow(
+            "SELECT stage, actual_value, margin FROM opportunities WHERE id = $1", w_opp)
+        wrow = dict(row)
+    check("opportunity closed-won with contract economics",
+          wrow["stage"] == "won" and float(wrow["actual_value"]) == 4500
+          and float(wrow["margin"]) == 2700, str(wrow))
 
     print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
     from app.services import backup as backup_svc
