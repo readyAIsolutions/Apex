@@ -232,3 +232,19 @@ def test_qa_passes_clean_copy():
     from app.services.content_qa import qa_content
     r = qa_content("Answers missed calls and books consultations. Opt-out anytime.")
     assert r["pass"] is True
+
+
+def test_podcast_storyboard_deterministic():
+    from worker.handlers import _podcast_storyboard
+    a = _podcast_storyboard("x", "cta1")
+    b = _podcast_storyboard("x", "cta1")
+    assert a == b
+    assert a["render_manifest"]["shorts"] == 3
+    assert a["simulated"] is True
+
+
+def test_podcast_permission_hard_stop():
+    from worker.handlers import _podcast_permission_ok
+    assert _podcast_permission_ok(None)[0] is False
+    assert _podcast_permission_ok({"likeness": "ref:l"})[0] is False
+    assert _podcast_permission_ok({"likeness": "ref:l", "voice": "ref:v"})[0] is True

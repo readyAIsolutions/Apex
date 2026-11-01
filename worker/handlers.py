@@ -324,6 +324,84 @@ async def email_nurture(conn, job, payload) -> AgentJobResult:
         recommended_next_actions=[f"POST /v1/approvals/{approval['id']}/decision -> execute"])
 
 
+def _podcast_permission_ok(permission) -> tuple[bool, str]:
+    """Workflow C hard stop (§5): documented permission for BOTH likenesses and voices."""
+    p = permission or {}
+    if p.get("likeness") and p.get("voice"):
+        return True, ""
+    missing = [k for k in ("likeness", "voice") if not p.get(k)]
+    return False, f"missing documented permission: {', '.join(missing)}"
+
+
+def _podcast_storyboard(topic: str, cta: str) -> dict:
+    """Deterministic storyboard + render manifest (SIMULATED — real render needs HeyGen/Runway keys)."""
+    return {
+        "title": f"Digital twin — {topic}",
+        "format": "simulated_storyboard",
+        "hosts": [{"name": "Host A", "permission": "documented"},
+                  {"name": "Host B", "permission": "documented"}],
+        "segments": [
+            {"beat": "hook", "lines": ["Every missed call is a missed estimate."]},
+            {"beat": "problem", "lines": [f"Restoration firms in Lloydminster and Edmonton lose work after hours."]},
+            {"beat": "solution", "lines": ["An AI receptionist answers instantly, captures details, and books the follow-up."]},
+            {"beat": "cta", "lines": [cta]},
+        ],
+        "shots": [
+            {"n": 1, "host": "Host A", "b_roll": "phone ringing"},
+            {"n": 2, "host": "Host B", "b_roll": "restoration site"},
+            {"n": 3, "host": "Host A", "b_roll": "calendar booking demo"},
+            {"n": 4, "host": "both", "b_roll": "office handshake"},
+            {"n": 5, "host": "Host B", "b_roll": "logo card + CTA"},
+        ],
+        "render_manifest": {
+            "full": {"duration_s": 240, "assets": ["voice_a.wav", "voice_b.wav",
+                                                   "b_roll_01.mp4", "subtitles.srt"]},
+            "shorts": 3,
+        },
+        "simulated": True,
+    }
+
+
+async def podcast_producer(conn, job, payload) -> AgentJobResult:
+    """§5 Workflow C — two-avatar podcast: permission gate -> storyboard -> QA -> approval."""
+    from app.services import approvals as approvals_service
+    from app.services.content_qa import qa_content
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    i = (inp or {}).get("input", {})
+    topic = i.get("topic") or payload.get("goal") or "AI receptionist for restoration firms"
+    cta = i.get("cta") or "Book a consultation at aimbex.example"
+    permission = i.get("permission")
+    ok, reason = _podcast_permission_ok(permission)
+    if not ok:
+        return AgentJobResult(status="succeeded", structured_output={"blocked": "missing_permission"},
+                              warnings=[f"Workflow C hard stop: {reason} (blueprint §5)"],
+                              recommended_next_actions=["attach input.permission.likeness + input.permission.voice refs"])
+    storyboard = _podcast_storyboard(topic, cta)
+    qa_text = i.get("script") or json.dumps(storyboard)
+    qa = qa_content(qa_text)
+    failures = [f for f in qa["findings"] if f["level"] == "fail"]
+    if failures:
+        return AgentJobResult(status="succeeded", structured_output={"blocked": "qa_failed", "findings": failures},
+                              warnings=["script failed compliance QA — cannot request publish approval"],
+                              recommended_next_actions=["remove banned claim language"])
+    asset = await conn.fetchrow(
+        "INSERT INTO content_assets (tenant_id, kind, status) VALUES ($1,'video','draft') RETURNING id",
+        payload["tenant_id"])
+    approval = await approvals_service.create_approval(
+        conn, payload["tenant_id"], "publish:podcast",
+        {"asset_id": str(asset["id"]), "topic": topic, "cta": cta, "permission": permission,
+         "render_manifest": storyboard["render_manifest"], "variant_count": 4})
+    return AgentJobResult(
+        status="succeeded",
+        structured_output={"approval_id": str(approval["id"]), "asset_id": str(asset["id"]),
+                           "blocked": None, "storyboard": storyboard,
+                           "render_manifest": storyboard["render_manifest"], "simulated": True},
+        recommended_next_actions=[f"POST /v1/approvals/{approval['id']}/decision -> execute",
+                                  "replace SIMULATED render with HeyGen/Runway output when credentialed"])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
@@ -332,5 +410,6 @@ HANDLERS = {
     "attribution": attribution,
     "paid_media": paid_media,
     "email_nurture": email_nurture,
+    "podcast_producer": podcast_producer,
     "crm_sync": crm_sync,
 }

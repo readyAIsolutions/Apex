@@ -90,7 +90,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (10)", len(rows) == 10, ", ".join(r["file"] for r in rows))
+    check("migrations applied (11)", len(rows) == 11, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -246,6 +246,7 @@ async def main():
                                          "explicit", "opted_out", proof_ref="verify:optout:email")
     check("seed contacts available for nurture flow", bool(demo_cid) and bool(optout_cid))
     em_jobs = {}
+    pod_jobs = {}
 
     with TestClientCompat(create_app()) as client:
         whkey = f"verify:wh:{uuid.uuid4().hex[:8]}"
@@ -413,6 +414,21 @@ async def main():
             em_jobs[tag] = jr.json().get("id") if jr.status_code == 202 else None
         check("email nurture jobs enqueued", all(em_jobs.values()), str(em_jobs))
 
+        # --- podcast pipeline jobs (Workflow C) ---
+        for tag, inp in (("p1", {}),
+                         ("p2", {"permission": {"likeness": "ref:l-consent", "voice": "ref:v-consent"},
+                                 "topic": "AI receptionist economics"}),
+                         ("p3", {"permission": {"likeness": "ref:l-consent", "voice": "ref:v-consent"},
+                                 "script": "guaranteed results with a risk-free setup"})):
+            jr = client.post("/v1/agents/jobs",
+                             headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                             json={"agent": "podcast_producer",
+                                   "goal": f"Podcast ({tag})",
+                                   "input": inp,
+                                   "idempotency_key": f"verify:{tag}:{uuid.uuid4().hex[:8]}"})
+            pod_jobs[tag] = jr.json().get("id") if jr.status_code == 202 else None
+        check("podcast jobs enqueued", all(pod_jobs.values()), str(pod_jobs))
+
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
     n = await run_once()
@@ -576,6 +592,38 @@ async def main():
               ex2.status_code == 200 and exj.get("decision") == "executed"
               and not exec_meta.get("applied"),
               f"HTTP {ex2.status_code} decision={exj.get('decision')} exec={str(exec_meta)[:80]}")
+
+    print("== 9c. Podcast pipeline E2E (Workflow C: permission -> storyboard -> QA -> publish) ==")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        async def _pod_out(tag):
+            row = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                      UUID(pod_jobs[tag]))
+            return json.loads(row["output_json"])["structured_output"] if row and row["output_json"] else {}
+        o_p1, o_p2, o_p3 = await _pod_out("p1"), await _pod_out("p2"), await _pod_out("p3")
+        appr_pod = o_p2.get("approval_id")
+        pod_asset = o_p2.get("asset_id")
+    check("podcast blocked without likeness/voice permission",
+          o_p1.get("blocked") == "missing_permission", str(o_p1)[:90])
+    check("podcast script QA blocks banned claims",
+          o_p3.get("blocked") == "qa_failed", str(o_p3.get("findings"))[:90])
+    check("podcast with permission -> storyboard + approval",
+          bool(appr_pod) and o_p2.get("simulated") is True
+          and o_p2.get("render_manifest", {}).get("shorts") == 3,
+          str(o_p2.get("render_manifest"))[:80])
+    with TestClientCompat(create_app()) as client:
+        decp = client.post(f"/v1/approvals/{appr_pod}/decision",
+                           headers={"Authorization": "Bearer apex_dev_approver_key"},
+                           json={"decision": "approve"})
+        check("approver approves podcast publish", decp.status_code == 200, f"HTTP {decp.status_code}")
+        exp = client.post(f"/v1/actions/{appr_pod}/execute",
+                          headers={"Authorization": "Bearer apex_dev_executor_key"})
+        exj = exp.json() if exp.status_code == 200 else {}
+        check("podcast published with receipt",
+              exp.status_code == 200 and exj.get("receipt", {}).get("platform") == "podcast",
+              f"HTTP {exp.status_code}: {str(exj.get('receipt'))[:90]}")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        ast = await conn.fetchval("SELECT status FROM content_assets WHERE id = $1", UUID(pod_asset))
+    check("podcast asset flipped to published", ast == "published", str(ast))
 
     print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
     from app.services import backup as backup_svc
