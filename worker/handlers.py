@@ -8,6 +8,7 @@ import uuid
 
 from app.integ import router as provider_router
 from app.schemas import AgentJobResult
+from worker import conversion_handlers as conversion
 
 INTENT_KEYWORDS = {
     "emergency": ["emergency", "immediate", "burst", "flood", "fire", "leak", "24/7", "asap", "now"],
@@ -644,4 +645,10 @@ HANDLERS = {
     "cgo_plan": cgo_plan,
     "social_distribute": social_distribute,
     "crm_sync": crm_sync,
+    # ---- Conversion Intelligence & Creative Evolution Engine (§4/§14) ----
+    "campaign_hunter": conversion.campaign_hunter,
+    "evidence_auditor": conversion.evidence_auditor,
+    "creative_evolution": conversion.creative_evolution,
+    "ab_test_designer": conversion.ab_test_designer,
+    "winning_strategy_memory": conversion.winning_strategy_memory,
 }

@@ -270,3 +270,84 @@ def test_social_post_deterministic():
     assert a == b
     assert a["utm"]["utm_source"] == "linkedin"
     assert "utm_source=linkedin" in a["text"]
+
+
+# ---- Conversion Intelligence & Creative Evolution Engine (§4/§14) ----
+
+
+def test_evidence_grading_demotes_hype():
+    from app.services.conversion_intel import grade_evidence, scan_for_hype, evidence_scanner_rules
+    # provable first-party result -> A
+    g, _ = grade_evidence(42, "first_party", True)
+    assert g == "A"
+    # unsubstantiated -> D no matter the claimed numbers
+    g, _ = grade_evidence(None, "unsubstantiated", False)
+    assert g == "D"
+    # hypothesis with no quantified result -> C
+    g, _ = grade_evidence(None, "hypothesis", False)
+    assert g == "C"
+    # hype lexicon actually flagged
+    assert scan_for_hype("make $10,000 guaranteed, secret formula, get rich quick") != []
+    assert scan_for_hype("we answer missed calls and book consultations") == []
+    assert evidence_scanner_rules()
+
+
+def test_copy_analysis_detects_angles():
+    from app.services.conversion_intel import analyze_copy
+    r = analyze_copy("Every missed call could be money walking out your door",
+                     "missed calls cost you jobs", "Book a free consultation now")
+    assert "problem_agitation" in r["headline_hook"]
+    assert "booking" in r["cta_style"]
+    assert "fear_missed_lead" in r["emotional_triggers"]
+    assert "urgency" in r["emotional_triggers"]
+
+
+def test_reverse_funnel_maps_journey():
+    from app.services.conversion_intel import reverse_funnel
+    fn = reverse_funnel("ad_video", "hook line", "free demo offer", "Book a consultation", "lp")
+    assert fn["journey"][0]["step"] == "attract"
+    assert fn["journey"][-1]["element"].startswith("cta:booking")
+    assert fn["primary_action"].startswith("cta:booking")
+
+
+def test_creative_evolution_is_original_and_hypothesis():
+    from app.services.conversion_intel import evolve_variant
+    brand = {"industry": "restoration contractors", "service": "24/7 AI receptionist",
+             "area": "Edmonton"}
+    v = evolve_variant({}, brand, {"creative_type": "ad_video", "headline": "every missed call",
+                                   "offer_text": ""})
+    assert v["hypothesis"] is True
+    assert "restoration" in v["headline"]
+    assert "Edmonton" in v["cta"]
+    # must NOT copy the source headline verbatim
+    assert "every missed call" not in v["headline"].lower()
+
+
+def test_ab_test_refuses_eager_winner():
+    from app.services.conversion_intel import ab_test_design
+    d = ab_test_design({"variant_name": "control"}, [{"variant_name": "v1"}, {"variant_name": "v2"}])
+    assert d["min_sample_for_winner"] >= 30
+    assert "no 'winner' declared" in d["guardrail"]
+
+
+def test_build_playbook_levels():
+    from app.services.conversion_intel import build_playbook
+    pb = build_playbook({"headline": "H", "cta": "C", "positioning_note": "principle"}, "A", "restoration")
+    assert pb["evidence_level"] == "verified"
+    pb2 = build_playbook({"headline": "H", "cta": "C", "positioning_note": "p"}, "D", "restoration")
+    assert pb2["evidence_level"] == "unsubstantiated"
+
+
+def test_campaign_corpus_honest():
+    from app.integ.campaign_corpus import CampaignCorpusAdapter
+    import asyncio
+    res = asyncio.run(CampaignCorpusAdapter().execute("research.pull", {"region": "CA-AB"}))
+    rows = res.data["research"]
+    assert res.data["simulated"] is True
+    # unsubstantiated rows must NOT carry fabricated quantified results
+    for r in rows:
+        if r.get("methodology") == "unsubstantiated":
+            assert r.get("quantified_result") is None
+    # corpus contains both strong and hype examples so the filter can be demonstrated
+    assert any(r.get("methodology") == "first_party" for r in rows)
+    assert any(r.get("methodology") == "unsubstantiated" for r in rows)

@@ -27,7 +27,7 @@ task_type -> provider_routes (DB or env) -> adapter (health-checked) -> execute(
 | §3 Agent contracts / envelope | `app/schemas.py`, `worker/handlers.py` |
 | §4 API connectivity registry | `app/integ/` + `provider_connections` / `provider_routes` tables |
 | §5 Event-driven workflows | `worker/handlers.py` + `app/services/leads.py`, `approvals.py` |
-| §6 Relational schema + RLS | `migrations/` (0001–0005), `migrations/0005_rls_roles.sql` |
+| §6 Relational schema + RLS | `migrations/` (0001–0015), `migrations/0005_rls_roles.sql` |
 | §7 Internal APIs | `app/routers/` (OpenAPI at `/docs`) |
 | §8 Infrastructure | `docker-compose.yml`, `Caddyfile.example`, `scripts/setup_db.py` |
 | §9 Pilot campaigns | `migrations/0006_seed_aimbex.sql` (brand facts, offer, areas) |

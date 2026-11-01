@@ -90,11 +90,11 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (14)", len(rows) == 14, ", ".join(r["file"] for r in rows))
+    check("migrations applied (15)", len(rows) == 15, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
-    check("RLS enabled on tenant tables", rls_on is not None and rls_on >= 19, f"{rls_on} tables")
+    check("RLS enabled on tenant tables", rls_on is not None and rls_on >= 23, f"{rls_on} tables")
     keys = await migrator.fetch("SELECT name, roles FROM api_keys ORDER BY name")
     check("api keys seeded", len(keys) >= 1, f"{len(keys)} keys")
 
@@ -474,6 +474,21 @@ async def main():
         soc_job = sj.json().get("id") if sj.status_code == 202 else None
         check("CGO + social jobs enqueued", bool(cgo_job) and bool(soc_job))
 
+        # --- Conversion Intelligence & Creative Evolution Engine (§4/§14) ---
+        conv_jobs = {}
+        conv_tags = ["hunter", "auditor", "evolve", "ab", "memory"]
+        conv_agents = ["campaign_hunter", "evidence_auditor", "creative_evolution",
+                       "ab_test_designer", "winning_strategy_memory"]
+        for tag, agent in zip(conv_tags, conv_agents):
+            cj = client.post("/v1/agents/jobs",
+                             headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                             json={"agent": agent, "goal": f"Conversion intel ({agent})",
+                                   "input": {"region": "CA-AB",
+                                             "variants": ["demo-variant-a", "demo-variant-b"]},
+                                   "idempotency_key": f"verify:conv:{tag}:{uuid.uuid4().hex[:8]}"})
+            conv_jobs[tag] = cj.json().get("id") if cj.status_code == 202 else None
+        check("conversion-intel jobs enqueued", all(conv_jobs.values()), str(conv_jobs))
+
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
     n = await run_once()
@@ -826,6 +841,43 @@ async def main():
           str(esc)[:90])
     check("regular lead not escalated", f_hr is False, f"funnel opp human_review={f_hr}")
 
+    print("== 9g. Conversion Intelligence & Creative Evolution Engine (§4/§14) ==")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        async def _conv_out(tag):
+            row = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                      UUID(conv_jobs[tag]))
+            return json.loads(row["output_json"])["structured_output"] if row and row["output_json"] else {}
+        hu, aud, evo, abt, mem = (await _conv_out("hunter"), await _conv_out("auditor"),
+                                  await _conv_out("evolve"), await _conv_out("ab"),
+                                  await _conv_out("memory"))
+        research_total = await conn.fetchval(
+            "SELECT count(*) FROM campaign_research WHERE tenant_id = $1", TENANT_AIMBEX)
+        grade_counts = await conn.fetch(
+            "SELECT grade, count(*)::int AS n FROM conversion_evidence "
+            "WHERE tenant_id = $1 GROUP BY grade", TENANT_AIMBEX)
+        gc = {r["grade"]: r["n"] for r in grade_counts}
+        variant_count = await conn.fetchval(
+            "SELECT count(*) FROM creative_experiments WHERE tenant_id = $1", TENANT_AIMBEX)
+        playbook_count = await conn.fetchval(
+            "SELECT count(*) FROM conversion_playbooks WHERE tenant_id = $1", TENANT_AIMBEX)
+    check("conversion-intel jobs all succeeded", all(conv_jobs.values()), str(conv_jobs))
+    check("research stored + hype filtered to grade D",
+          research_total >= 5 and gc.get("D", 0) >= 2,
+          f"research={research_total} grades={gc}")
+    check("hunter demoted unsubstantiated hype (D present)", gc.get("D", 0) >= 1, str(gc))
+    check("evidence auditor graded keepers (A/B present)", gc.get("A", 0) >= 1 or gc.get("B", 0) >= 1, str(gc))
+    check("original creative variants evolved",
+          variant_count >= 2 and evo.get("variants", []), f"variants={variant_count}")
+    check("variant labelled a hypothesis, never a winner",
+          evo.get("hypothesis_note") is not None and any(v["headline"] for v in evo.get("variants", [])),
+          f"notes={bool(evo.get('hypothesis_note'))}")
+    check("reusable per-industry playbooks recorded", playbook_count >= 1, f"playbooks={playbook_count}")
+    check("A/B test design refuses eager winners",
+          bool(abt.get("design")) and "min_sample_for_winner" in abt.get("design", {}),
+          str(abt.get("design", {}))[:80])
+    check("winning strategy memory summarized verified winners",
+          "verified_winners" in mem, f"winners={len(mem.get('verified_winners', []))}")
+
     print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
     from app.services import backup as backup_svc
     snap = await backup_svc.create_snapshot()          # logical snapshot (asyncpg-only)
@@ -848,7 +900,7 @@ async def main():
     await mig2.close()
     check("restored snapshot keeps cross-tenant rows", b_rows >= 1 and b_marker == 1,
           f"B contacts={b_rows} marker={b_marker}")
-    check("restored schema has RLS policies", rls2 >= 19, f"rls_tables={rls2}")
+    check("restored schema has RLS policies", rls2 >= 23, f"rls_tables={rls2}")
     await backup_svc.drop_scratch()
 
     sys.path.insert(0, str(ROOT / "scripts"))

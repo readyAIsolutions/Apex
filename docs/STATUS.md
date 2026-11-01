@@ -1,8 +1,9 @@
 # APEX COMMAND AI — build status (1 November 2026)
+# Build 14: Conversion Intelligence & Creative Evolution Engine (§4/§14). 118/118 green.
 # Build 13 (final): every §4 agent implemented + RUNBOOK/OPENAPI artifacts. 108/108 green.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **108/108 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **118/118 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -34,6 +35,7 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **108/10
 | **Build 12 — PR/Link Prospecting (§4 Workflow E P2)** | `pr_prospecting` agent: **paid placement without disclosure is REFUSED** (no purchased undisclosed links); only operator-supplied candidates (no fabricated publisher lists/authority scores); deterministic relevance scoring from provided evidence; `publish:link` approvals → receipts (platform link) + dashboard `referral_links`. Verified: undisclosed-paid blocked, earned + disclosed published with receipts |
 | **Build 13 — CGO + Concierge + Social (final §4 coverage)** | `cgo_plan`: weekly growth plan from reconciled dashboard, **refuses scale on tiny samples**, read-only stance (no auto actions); Lead Concierge: **urgent/sensitive leads escalate to a human** (`human_review` flag, audit, no auto-booking); `social_distribute`: platform posts + UTM for PUBLISHED assets → per-platform receipts. Restore schema updated for `human_review`. **Every §4 agent now implemented and verified** |
 | **Build 13 — artifacts** | `docs/RUNBOOK.md` (ops, recovery, day-14 go/no-go checklist) + `docs/OPENAPI.json` (20 paths) |
+| **Build 14 — Conversion Intelligence & Creative Evolution Engine (§4/§14)** | Filters bad funnels/copy, grades evidence A–D (unsubstantiated hype → **D**, provable first-party → **A**), reverse-engineers funnels, evoles ORIGINAL client variants (never copied), labels every variant a hypothesis, packages reusable per-industry playbooks, and designs A/B tests that refuse eager winners. 5 worker agents (campaign_hunter, evidence_auditor, creative_evolution, ab_test_designer, winning_strategy_memory) + 4 new RLS tables (campaign_research, conversion_evidence, creative_experiments, conversion_playbooks, migration 0015). Runs keyless on a deterministic corpus (campaign_corpus) — swap `research.pull` to meta_ads_library/semrush/similarweb when credentialed. **Verified: hype demoted to D, keepers graded A, variants evolved, playbooks recorded.** |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)

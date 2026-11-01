@@ -10,6 +10,7 @@ from typing import Optional
 from app.config import settings
 from app.integ.base import LocalExecutorAdapter, ProviderAdapter, RouteUnavailable, ShellAdapter
 from app.integ.brevo import BrevoEmailAdapter
+from app.integ.campaign_corpus import CampaignCorpusAdapter
 from app.integ.dev_demand import DevDemandAdapter
 from app.integ.ga4 import GA4Adapter
 from app.integ.gsc import GSCAdapter
@@ -35,6 +36,9 @@ def build_registry() -> dict[str, ProviderAdapter]:
         "gsc": GSCAdapter(),          # real Search Console API (service-account OAuth)
         "ga4": GA4Adapter(),          # real GA4 Data API
         "dev_demand": DevDemandAdapter(),  # deterministic simulated source for keyless E2E
+
+        # ---- conversion intelligence: research source (keyless corpus -> real ads libs) ----
+        "campaign_corpus": CampaignCorpusAdapter(),  # simulated research for keyless E2E
 
         # ---- honest shells: slots that fail closed until wired (see ALTERNATIVES.md) ----
         "google_ads": ShellAdapter("google_ads", ["GOOGLE_OAUTH_JSON", "GOOGLE_ADS_CUSTOMER_ID"],
