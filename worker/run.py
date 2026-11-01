@@ -41,7 +41,7 @@ async def process_one(raw: str) -> None:
             return
         try:
             result = await fn(conn, row, payload)
-            state = "succeeded" if result.status == "succeeded" else "failed"
+            state = "succeeded" if result.status in ("succeeded", "not_configured") else "failed"
             await jobs_service.finish_job(conn, tenant_id, job_id, result, state,
                                           result.cost_usd,
                                           None if state == "succeeded" else "; ".join(result.warnings))

@@ -10,6 +10,9 @@ from typing import Optional
 from app.config import settings
 from app.integ.base import LocalExecutorAdapter, ProviderAdapter, RouteUnavailable, ShellAdapter
 from app.integ.brevo import BrevoEmailAdapter
+from app.integ.dev_demand import DevDemandAdapter
+from app.integ.ga4 import GA4Adapter
+from app.integ.gsc import GSCAdapter
 from app.integ.odoo_crm import OdooCRMAdapter
 from app.integ.openrouter import OpenRouterAdapter
 
@@ -28,11 +31,12 @@ def build_registry() -> dict[str, ProviderAdapter]:
                                    sender_email=settings.brevo_sender_email),
         "local": LocalExecutorAdapter(),
 
+        # ---- demand intelligence: REAL google adapters (fails closed without creds) ----
+        "gsc": GSCAdapter(),          # real Search Console API (service-account OAuth)
+        "ga4": GA4Adapter(),          # real GA4 Data API
+        "dev_demand": DevDemandAdapter(),  # deterministic simulated source for keyless E2E
+
         # ---- honest shells: slots that fail closed until wired (see ALTERNATIVES.md) ----
-        "ga4": ShellAdapter("ga4", ["GOOGLE_OAUTH_JSON", "GA4_PROPERTY_ID"],
-                            "POST https://analyticsdata.googleapis.com/v1beta/properties/{id}:runReport"),
-        "gsc": ShellAdapter("gsc", ["GOOGLE_OAUTH_JSON", "GSC_SITE_URL"],
-                            "POST https://searchconsole.googleapis.com/webmasters/v3/sites/{site}/searchAnalytics/query"),
         "google_ads": ShellAdapter("google_ads", ["GOOGLE_OAUTH_JSON", "GOOGLE_ADS_CUSTOMER_ID"],
                                    "POST https://googleads.googleapis.com/v17/customers/{id}/googleAds:searchStream"),
         "meta_ads": ShellAdapter("meta_ads", ["META_ACCESS_TOKEN", "META_AD_ACCOUNT_ID"],

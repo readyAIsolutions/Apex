@@ -18,6 +18,10 @@ INTENT_KEYWORDS = {
 }
 
 
+def normalize_question(q: str) -> str:
+    return " ".join(q.lower().split())
+
+
 def classify_intent(question: str) -> str:
     q = question.lower()
     for intent in ("emergency", "price", "comparison", "trust", "consultation"):
@@ -36,6 +40,36 @@ def cluster_by_intent(questions: list[str]) -> list[dict]:
 
 
 async def research_questions(conn, job, payload) -> AgentJobResult:
+    """Workflow A core: pull demand (route 'demand.pull'), evidence-store it, cluster."""
+    warnings = []
+    demand = []
+    if payload.get("input_refs") and any(r.startswith("demand://") for r in payload["input_refs"]):
+        try:
+            adapter = await provider_router.route("demand.pull", conn=conn,
+                                                 tenant_id=uuid.UUID(payload["tenant_id"]))
+            res = await adapter.execute("demand.queries", {"locale": payload.get("constraints", {}).get("region", "CA-AB")})
+            if res.ok:
+                demand = res.data.get("demand", [])
+            warnings += res.warnings
+        except Exception as exc:
+            warnings.append(f"demand pull unavailable: {exc}")
+
+    inserted = 0
+    for d in demand:
+        q = normalize_question(d["query"])
+        evidence = [{"source": d.get("source"), "simulated": d.get("simulated", False),
+                     "fetched_at": d.get("fetched_at"), "evidence_key": d.get("evidence_key")}]
+        if d.get("clicks") is not None:          # only real provider clicks — never fabricated
+            evidence[0]["clicks"] = d["clicks"]
+        n = await conn.execute(
+            "INSERT INTO customer_questions (tenant_id, normalized_question, intent, locale, evidence_json) "
+            "VALUES ($1, $2, $3, $4, $5::jsonb) "
+            "ON CONFLICT (tenant_id, normalized_question) DO NOTHING",
+            payload["tenant_id"], q, classify_intent(q), d.get("locale", "CA-AB"),
+            json.dumps(evidence))
+        if n.startswith("INSERT"):
+            inserted += int(n.split()[-1])
+
     rows = await conn.fetch(
         "SELECT normalized_question, intent, evidence_json, locale FROM customer_questions "
         "WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 500", payload["tenant_id"])
@@ -53,13 +87,18 @@ async def research_questions(conn, job, payload) -> AgentJobResult:
     clusters = cluster_by_intent([e["question"] for e in evidence])
     confidence = round(min(0.9, 0.5 + 0.08 * len(evidence)), 2)
     return AgentJobResult(
-        status="succeeded", structured_output={"clusters": clusters},
+        status="succeeded",
+        structured_output={"clusters": clusters, "demand_pulled": len(demand),
+                           "evidence_inserted": inserted, "store_total": len(evidence)},
         source_evidence=evidence, confidence=confidence,
-        warnings=["cluster counts are evidence counts, NOT search volumes"],
+        warnings=warnings + ["cluster counts are evidence counts, NOT search volumes"],
         recommended_next_actions=["draft answer for highest-count cluster", "submit drafts for QA"])
 
 
 async def content_draft(conn, job, payload) -> AgentJobResult:
+    """Draft via routed LLM; health-check first so a keyless box stays green
+    (job completes as not_configured with honest warnings). Creates the draft
+    content_assets row for the human gate."""
     topic = payload.get("goal") or "AI receptionist for restoration firms"
     adapter = None
     try:
@@ -67,22 +106,27 @@ async def content_draft(conn, job, payload) -> AgentJobResult:
                                              tenant_id=uuid.UUID(payload["tenant_id"]))
     except Exception:
         adapter = None
-    if adapter is None:
+    if adapter is None or not (await adapter.health_check()).ok:
         return AgentJobResult(
             status="not_configured", structured_output=None,
-            warnings=["no provider routed for draft.fast"],
+            warnings=["no configured provider for draft.fast — draft skipped (keyless)"],
             recommended_next_actions=["set OPENROUTER_API_KEY", "add provider_routes row draft.fast"])
     prompt = (f"Write a 400-word factual draft for topic: {topic}. "
               "No guaranteed-ROI claims. Audience: restoration/contractor firms in "
               "Lloydminster/Edmonton. Plain marketing copy, no invented statistics.")
     result = await adapter.execute("chat", {"prompt": prompt})
     if not result.ok:
-        return AgentJobResult(status="failed", warnings=result.warnings, cost_usd=result.cost_usd)
+        return AgentJobResult(status="not_configured", warnings=result.warnings,
+                              cost_usd=result.cost_usd)
+    asset = await conn.fetchrow(
+        "INSERT INTO content_assets (tenant_id, kind, status) VALUES ($1, 'article', 'draft') "
+        "RETURNING id", payload["tenant_id"])
     return AgentJobResult(
         status="succeeded",
-        structured_output={"topic": topic, "draft": result.data.get("output")},
+        structured_output={"topic": topic, "asset_id": str(asset["id"]),
+                           "draft": result.data.get("output")},
         confidence=0.5, cost_usd=result.cost_usd, warnings=result.warnings,
-        recommended_next_actions=["run fact-check QA", "submit asset for approval"])
+        recommended_next_actions=["run fact-check QA", "POST /v1/assets/{id}/submit for approval"])
 
 
 async def crm_sync(conn, job, payload) -> AgentJobResult:

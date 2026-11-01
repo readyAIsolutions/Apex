@@ -5,10 +5,21 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import require_role
 from app.db import TenantScope
-from app.schemas import AssetSubmitIn
+from app.schemas import AssetCreate, AssetSubmitIn
 from app.services import approvals as approvals_service
 
 router = APIRouter(tags=["assets"])
+
+
+@router.post("/assets", status_code=status.HTTP_201_CREATED)
+async def create_asset(body: AssetCreate, principal=Depends(require_role("editor"))):
+    """Create a draft content asset (drafts are internal until submitted for approval)."""
+    async with TenantScope(principal.tenant_id) as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO content_assets (tenant_id, kind, campaign_id, status) "
+            "VALUES ($1, $2, $3, 'draft') RETURNING id, kind, status",
+            principal.tenant_id, body.kind, body.campaign_id)
+    return {"asset_id": str(row["id"]), "kind": row["kind"], "status": row["status"]}
 
 
 @router.post("/assets/{asset_id}/submit", status_code=status.HTTP_201_CREATED)

@@ -72,6 +72,12 @@ class ResearchRequest(BaseModel):
     cost_cap_usd: float = Field(default=0.20, ge=0)
 
 
+class AssetCreate(BaseModel):
+    kind: str = "article"
+    campaign_id: Optional[uuid.UUID] = None
+    note: Optional[str] = None
+
+
 class AssetSubmitIn(BaseModel):
     platform: str                     # site|google|meta|youtube|email|blog
     publish_action: str = "publish"

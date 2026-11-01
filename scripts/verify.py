@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""APEX verification suite — proves the blueprint's P0 acceptance criteria (§11) with
+"""APEX verification suite — proves the blueprint's acceptance criteria (§11) with
 REAL execution against the REAL database. No mocks for the things that matter:
-RLS denial, approval hash gate, webhook idempotency, consent opt-out, Odoo flow.
+RLS denial, approval hash gate, webhook idempotency, consent opt-out, Odoo flow,
+asset->approval->publish gate, and Workflow A demand->question->briefs.
 
 Re-runnable: every mutating check uses a fresh key/row; tenant B is upserted.
 
 Loop-safety: the app's connection pool is created ONLY inside the TestClient's own
-event loop and closed there. All DB sections below use dedicated apex_app connections
+event loop and closed there. All DB sections use dedicated apex_app connections
 (app_scope) so the pool is never handed across asyncio loops. The worker runs AFTER
 TestClient exits (fresh pool in the main loop).
 
@@ -69,7 +70,6 @@ async def main():
     from app.integ import REGISTRY as REG
     from app.schemas import LeadEventIn
     from app.services import approvals as appr
-    from app.services import consent as consent_svc
     from app.services import leads as leads_svc
     from worker.handlers import cluster_by_intent
 
@@ -78,7 +78,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (7)", len(rows) == 7, ", ".join(r["file"] for r in rows))
+    check("migrations applied (8)", len(rows) == 8, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -86,7 +86,6 @@ async def main():
     keys = await migrator.fetch("SELECT name, roles FROM api_keys ORDER BY name")
     check("api keys seeded", len(keys) >= 1, f"{len(keys)} keys")
 
-    # tenant B (upsert) for isolation tests
     await migrator.execute("INSERT INTO tenants (id, name) VALUES ($1,'Tenant B') "
                            "ON CONFLICT (id) DO NOTHING", TENANT_B)
     await migrator.execute(
@@ -179,7 +178,7 @@ async def main():
     check("intent clustering + dedupe",
           by_intent["emergency"]["count"] == 1 and by_intent["price"]["count"] == 1)
 
-    print("== 6. webhook intake + API smoke (HMAC, RBAC, dashboard, gate) ==")
+    print("== 6. webhook intake + API smoke + asset gate (HMAC, RBAC, dashboard, publish) ==")
     from app.main import create_app
 
     with TestClientCompat(create_app()) as client:
@@ -217,11 +216,36 @@ async def main():
         check("agent job enqueued", rjob.status_code == 202, str(rjob.status_code))
         job_id = rjob.json()["id"]
 
-        ar = client.post(f"/v1/actions/00000000-0000-4000-8000-000000000000/execute",
+        ar = client.post("/v1/actions/00000000-0000-4000-8000-000000000000/execute",
                          headers={"Authorization": "Bearer apex_dev_executor_key"})
         check("action executor route reachable (404 on unknown)", ar.status_code == 404, str(ar.status_code))
 
-    # worker runs AFTER TestClient homepage (fresh pool in main loop, no cross-loop)
+        # ---- E2E human gate over HTTP: create draft -> submit -> approve -> execute -> receipt ----
+        cre_r = client.post("/v1/assets", headers={"Authorization": "Bearer apex_dev_analyst_key"},
+                            json={"kind": "article"})
+        check("analyst cannot create asset (editor+)", cre_r.status_code == 403, str(cre_r.status_code))
+        cre_r = client.post("/v1/assets", headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                            json={"kind": "article"})
+        gate_asset_id = cre_r.json()["asset_id"]
+        sub_r = client.post(f"/v1/assets/{gate_asset_id}/submit",
+                            headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                            json={"platform": "site"})
+        gate_approval_id = sub_r.json()["approval_id"]
+        apr_r = client.post(f"/v1/approvals/{gate_approval_id}/decision",
+                            headers={"Authorization": "Bearer apex_dev_approver_key"},
+                            json={"decision": "approve"})
+        check("approver approves asset",
+              apr_r.status_code == 200 and apr_r.json()["decision"] == "approved", str(apr_r.status_code))
+        exec_r = client.post(f"/v1/actions/{gate_approval_id}/execute",
+                             headers={"Authorization": "Bearer apex_dev_executor_key"})
+        if exec_r.status_code == 200:
+            exec_ok = exec_r.json().get("decision") == "executed" and "receipt" in exec_r.json()
+        else:
+            exec_ok = False
+        check("executor publishes with receipt", exec_ok,
+              f"HTTP {exec_r.status_code}: {exec_r.text[:160]}")
+
+    # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from uuid import UUID
     from worker.run import run_once
     n = await run_once()
@@ -230,6 +254,43 @@ async def main():
         jr = await conn.fetchrow("SELECT state, output_json FROM agent_jobs WHERE id = $1",
                                  UUID(job_id))
     check("job completed", jr is not None and jr["state"] == "succeeded", jr["state"] if jr else "missing")
+
+    # E2E gate side-effects (publication + asset status)
+    async with app_scope(TENANT_AIMBEX) as conn:
+        pub = await conn.fetchval("SELECT count(*) FROM publications WHERE asset_id = $1",
+                                  UUID(gate_asset_id))
+        ast = await conn.fetchval("SELECT status FROM content_assets WHERE id = $1",
+                                  UUID(gate_asset_id))
+    check("publication receipt recorded", pub == 1, f"publications={pub}")
+    check("asset flipped to published", ast == "published", str(ast))
+
+    print("== 7. Workflow A end-to-end (demand -> question store -> briefs) ==")
+    import redis.asyncio as aioredis
+    from app.services.workflow_a import run_workflow_a
+    r = aioredis.from_url(os.environ["REDIS_URL"])
+    try:
+        async with app_scope(TENANT_AIMBEX) as conn:
+            wfa = await run_workflow_a(conn, TENANT_AIMBEX, "CA-AB", redis=r,
+                                       run_key=f"wf-{uuid.uuid4().hex[:8]}")
+        n2 = await run_once()
+        async with app_scope(TENANT_AIMBEX) as conn:
+            q_total = await conn.fetchval(
+                "SELECT count(*) FROM customer_questions WHERE tenant_id = $1", TENANT_AIMBEX)
+            drafts = await conn.fetch(
+                "SELECT id, state FROM agent_jobs WHERE tenant_id = $1 AND agent = 'content_writer' LIMIT 10",
+                TENANT_AIMBEX)
+    finally:
+        await r.aclose()
+    check("workflow A ran ok", wfa["status"] == "ok" and wfa["pulled"] >= 25, f"pulled={wfa.get('pulled')}")
+    check("question store populated", q_total >= 25, f"store={q_total}")
+    check("top clusters produced", len(wfa["top_clusters"]) >= 1, f"clusters={len(wfa['top_clusters'])}")
+    check("worker drained workflow jobs", n2 >= 1, f"drained={n2}")
+    check("brief jobs completed (keyless = not_configured)",
+          bool(drafts) and all(d["state"] == "succeeded" for d in drafts), f"{len(drafts)} drafts ok")
+    for c in wfa["top_clusters"]:
+        print(f"      - {c['intent']:13s} n={c['count']:3d}  e.g. \"{c['questions'][0]}\"")
+    for w in wfa["warnings"]:
+        print(f"      warning: {w}")
 
     await migrator.close()
     return len(FAIL)

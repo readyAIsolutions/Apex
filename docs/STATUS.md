@@ -1,7 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
+# Build 2 of the hour: real Google adapters + Workflow A + asset->publish gate.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **31/31 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **41/41 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -11,6 +12,9 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **31/31 
 | P0 CRM + lead ingestion | Webhook → dedupe → contact → lead event → opportunity → **Odoo mirror** (mock) with external-ref reconcile; duplicate event_keys processed once |
 | P0 Consent + approval gates | Opt-out blocks the pipeline (no lead event, no CRM write); approval create → approve → execute-once; tampered payload blocked (hash mismatch); expired approval rejected |
 | P0 Analytics → CRM reporting | Dashboard returns reconciled spend ($305.90 seeded), CAC ($305.90/qualified lead), wins, revenue ($3,000), margin ($1,800) + explicit caveats — no fabricated attribution |
+| **Build 2 — demand intelligence (Workflow A)** | `scripts/workflow_a.py` pulls demand via data-driven route (`dev_demand` simulated → swap to real gsc), stores evidence-backed questions (dedupe, evidence timestamps/source, **no fabricated volumes**), clusters by intent, queues content briefs, worker completes them — verified E2E (30 pulled, 30 stored, top-3 clusters, 3 brief jobs) |
+| **Build 2 — full asset→approval→publish gate over HTTP** | `POST /v1/assets` (editor+) → submit → approve (approver key) → execute (executor key) → **publication receipt row + asset flipped published**, all in one transaction, verified |
+| **Build 2 — real Google adapters** | `gsc` + `ga4` implement real service-account OAuth (RS256 JWT, `cryptography`) + real API calls; fail CLOSED without creds; request/auth shapes unit-tested with a fake transport |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -48,11 +52,11 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 
 ## Next unblocked pieces (for the "keep going" session)
 
-1. P1: wire `gsc` adapter (real GSC query pull) → seed `customer_questions` → run question-intelligence job
-2. P1: `content_draft` handler → asset submit → approval → publish receipt (needs an OPENROUTER_API_KEY)
-3. Real Odoo: provision Odoo 17 (docker-compose `--profile crm`), create `apex_external_ref` field on `crm.lead`, flip `ODOO_MOCK=0`
-4. P2: HeyGen two-avatar podcast pipeline
-5. Workflow A weekly cron (research → draft → QA → approve) — §5
+1. **Provision real Google creds** → set `GOOGLE_OAUTH_JSON` service account + `GSC_SITE_URL`/`GA4_PROPERTY_ID`, flip `provider_routes.demand.pull` to `gsc` (dev_demand is the verified fallback)
+2. **Real Odoo 17** (docker-compose `--profile crm`), add `apex_external_ref` field on `crm.lead`, set `ODOO_MOCK=0`
+3. **OpenRouter key** → content_briefs start producing real drafts (jobs already complete as `not_configured` when keyless)
+4. P2: HeyGen two-avatar podcast (§5 workflow C)
+5. Weekly Workflow A cron already scheduled (script `scripts/workflow_a_cron.sh`, Mon 06:00 local)
 
 ## Pitfalls recorded (this build)
 
