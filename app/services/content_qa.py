@@ -16,6 +16,13 @@ BANNED_ROI_RE = [
     re.compile(r"best[\s-]*in[\s-]*canada", re.I),
     re.compile(r"#1\s+in\s+canada", re.I),
     re.compile(r"only\s+way", re.I),
+    # added in build 16 (found by the LLM-variant validator test): common promise phrasings
+    re.compile(r"\b(we|i|aimbex)\s+(guarantee|promise|assure)\b", re.I),
+    re.compile(r"\bguarantee[sd]?\b", re.I),
+    re.compile(r"\b(zero|without\s+any|absolutely\s+no)\s+risk", re.I),
+    re.compile(r"\b\d+\s*x\s+(roi|return|your\s+(money|investment|revenue|leads|sales))", re.I),
+    re.compile(r"\b(double|triple|quadruple)\s+your\s+(revenue|sales|leads|income|profit)", re.I),
+    re.compile(r"\bnever\s+(miss|lose)\s+(a|another|any)\s+(single\s+)?(call|lead|customer)\b", re.I),
 ]
 
 # Numbers like "37% faster" or "$10k/month" need a citable source — flagged as warn.

@@ -83,9 +83,14 @@ class OpenRouterAdapter(ProviderAdapter):
         output = content
         if json_mode:
             import json as _json
+            import re as _re
+            text = content.strip()
+            fence = _re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, _re.S)   # Claude wraps JSON in fences
+            if fence:
+                text = fence.group(1)
             try:
-                output = _json.loads(content)
-            except Exception:
+                output = _json.loads(text)
+            except ValueError:
                 warnings.append("json_mode requested but content not valid JSON")
 
         return AdapterResult(True, {"model": model, "output": output},

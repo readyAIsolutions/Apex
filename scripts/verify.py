@@ -89,7 +89,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (16)", len(rows) == 16, ", ".join(r["file"] for r in rows))
+    check("migrations applied (18)", len(rows) == 18, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -898,6 +898,22 @@ async def main():
     check("A/B designer queues the drafted variants", queued_ab >= 2, f"queued={queued_ab}")
     check("evolution makes multiple angles per keeper",
           len({v["angle"] for v in evo.get("variants", [])}) >= 2, str({v["angle"] for v in evo.get("variants", [])}))
+    # LLM layer (only asserted when a key is configured; otherwise must degrade to rules, not fail)
+    has_key = bool(os.environ.get("OPENROUTER_API_KEY") or __import__("app.config", fromlist=["settings"]).settings.openrouter_api_key)
+    llm_info = hu.get("llm", {})
+    if has_key:
+        check("LLM analysed ads and cached principles", llm_info.get("enabled") is True, str(llm_info))
+        async with app_scope(TENANT_AIMBEX) as conn:
+            n_llm = await conn.fetchval(
+                "SELECT count(*) FROM campaign_research WHERE tenant_id=$1 AND copy_features ? 'llm'", TENANT_AIMBEX)
+            n_src = await conn.fetch(
+                "SELECT variant_json->>'source' s, count(*) n FROM creative_experiments WHERE tenant_id=$1 GROUP BY 1",
+                TENANT_AIMBEX)
+        check("principles stored from LLM analysis", n_llm >= 1, f"rows_with_llm={n_llm}")
+        check("variants carry their origin (llm/rules)", {r["s"] for r in n_src} <= {"llm", "rules", None},
+              str({r["s"]: r["n"] for r in n_src}))
+    else:
+        check("keyless: engine degrades to rules (no failure)", llm_info.get("enabled") is False, str(llm_info))
     check("conversion-intel jobs all succeeded", all(conv_jobs.values()), str(conv_jobs))
     check("research stored + hype filtered to grade D",
           research_total >= 5 and gc.get("D", 0) >= 2,

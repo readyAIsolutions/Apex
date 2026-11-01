@@ -14,6 +14,24 @@ import json
 from app.integ import router as provider_router
 from app.schemas import AgentJobResult
 from app.services import conversion_intel as ci
+from app.services.content_qa import qa_content
+
+MAX_LLM_CALLS_PER_JOB = 12          # hard per-job spend guard (each call is ~$0.0002 on deepseek)
+
+
+async def _llm(conn, tenant, task: str):
+    """Routed LLM adapter or None (fail soft -> rule-based fallback)."""
+    try:
+        a = await provider_router.route(task, conn=conn, tenant_id=tenant)
+        return a if (await a.health_check()).ok else None
+    except Exception:
+        return None
+
+
+async def _llm_json(adapter, messages, model=None):
+    res = await adapter.execute("extract", {"messages": messages, **({"model": model} if model else {})})
+    out = res.data.get("output") if res.ok else None
+    return (out if isinstance(out, dict) else None), res.cost_usd, res.warnings
 
 
 def job_input(job, payload=None) -> dict:
@@ -47,17 +65,37 @@ async def campaign_hunter(conn, job, payload) -> AgentJobResult:
                                   structured_output={"error": res.warnings})
         rows, simulated = res.data.get("research", []), bool(res.data.get("simulated"))
     stored, grades, new_rows = [], {}, 0
+    llm = await _llm(conn, tenant, "research.analyze.llm") if not inp.get("no_llm") else None
+    llm_calls, llm_cost, llm_ok, llm_bad, llm_warn = 0, 0.0, 0, 0, []
     for row in rows:
         hype = ci.scan_for_hype(" ".join([row.get("headline", ""), row.get("body", ""),
                                           row.get("offer_text", "")]))
         grade, why = _grade_row(row, hype)
         h = ci.content_hash(row.get("source_url", "n/a"), row.get("headline", ""))
         features = ci.analyze_copy(row.get("headline", ""), row.get("body", ""), row.get("cta_text", ""))
+        known = await conn.fetchval("SELECT copy_features FROM campaign_research WHERE tenant_id=$1 "
+                                    "AND content_hash=$2", tenant, h)
+        known = json.loads(known) if isinstance(known, str) else known
+        if isinstance(known, dict) and known.get("llm"):
+            features = known                      # cached: never pay twice for the same ad
+        elif llm is not None and llm_calls < MAX_LLM_CALLS_PER_JOB:
+            llm_calls += 1
+            obj, cost, _w = await _llm_json(llm, ci.llm_analysis_messages(row))
+            llm_cost += cost
+            if obj is None and len(llm_warn) < 2:
+                llm_warn.append("LLM analysis call failed: " + "; ".join(_w)[:160])
+            checked = ci.validate_llm_analysis(obj)
+            if checked:
+                features = {**features, "llm": checked}
+                llm_ok += 1
+            else:
+                llm_bad += 1                       # invalid/injected output is dropped, rules remain
         rec = await conn.fetchrow(
             "INSERT INTO campaign_research (tenant_id, provider, source_url, creative_type, headline, "
             "hook_first_3s, offer_text, claims, copy_features, observed_signals, confidential_evidence, "
             "collected_by, content_hash) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13) "
-            "ON CONFLICT (tenant_id, content_hash) DO UPDATE SET observed_signals = EXCLUDED.observed_signals "
+            "ON CONFLICT (tenant_id, content_hash) DO UPDATE SET observed_signals = EXCLUDED.observed_signals, "
+            "copy_features = EXCLUDED.copy_features "
             "RETURNING id, (xmax = 0) AS inserted",
             tenant, row.get("source", "campaign_corpus"), row.get("source_url", "n/a"),
             row.get("creative_type", "ad_video"), (row.get("headline") or "")[:400],
@@ -80,9 +118,12 @@ async def campaign_hunter(conn, job, payload) -> AgentJobResult:
         stored.append({"research_id": str(rid), "grade": grade, "headline": (row.get("headline") or "")[:60]})
     return AgentJobResult(
         status="succeeded",
+        cost_usd=llm_cost,
         structured_output={"stored": stored, "new_rows": new_rows, "grade_totals": grades,
-                           "filtered_out": grades.get("D", 0), "simulated": simulated},
-        warnings=["research source is SIMULATED — grades are demonstrations, not market proof"] if simulated else [],
+                           "filtered_out": grades.get("D", 0), "simulated": simulated,
+                           "llm": {"enabled": llm is not None, "analysed": llm_ok,
+                                   "rejected_invalid": llm_bad, "calls": llm_calls}},
+        warnings=llm_warn + (["research source is SIMULATED — grades are demonstrations, not market proof"] if simulated else []),
         recommended_next_actions=["creative_evolution: derive original variants from A/B keepers"])
 
 
@@ -114,15 +155,40 @@ async def creative_evolution(conn, job, payload) -> AgentJobResult:
         "e.id AS evidence_id, e.grade FROM conversion_evidence e JOIN campaign_research r ON r.id = e.research_id "
         "WHERE e.tenant_id = $1 AND e.grade IN ('A','B') ORDER BY e.grade, e.sample_size DESC NULLS LAST LIMIT 5",
         tenant)
-    variants, created = [], 0
+    variants, created, rejected_all, llm_cost = [], 0, [], 0.0
+    llm = await _llm(conn, tenant, "draft.strong") if not inp.get("no_llm") else None
+    facts = [r["fact"] for r in await conn.fetch(
+        "SELECT fact FROM brand_knowledge WHERE tenant_id=$1 AND (expires_at IS NULL OR expires_at > now()) "
+        "ORDER BY created_at LIMIT 12", tenant)]
+    llm_calls, llm_warnings = 0, []
     for k in keepers:
         sig = k["observed_signals"]
         sig = json.loads(sig) if isinstance(sig, str) else (sig or {})
         simulated = bool(sig.get("simulated"))
         origin = {"creative_type": k["creative_type"], "headline": k["headline"],
                   "offer_text": k["offer_text"] or "", "hook_first_3s": k["hook_first_3s"]}
-        for angle in ci.candidate_angles(origin, per_keeper):
-            v = ci.evolve_variant({}, brand, origin, angle=angle)
+        feats = await conn.fetchval("SELECT copy_features FROM campaign_research WHERE id=$1", k["id"])
+        feats = json.loads(feats) if isinstance(feats, str) else (feats or {})
+        principle = (feats.get("llm") or {}).get("reusable_principle")
+        generated = []
+        if llm is not None and principle and llm_calls < MAX_LLM_CALLS_PER_JOB:
+            llm_calls += 1
+            route = await conn.fetchval("SELECT model FROM provider_routes WHERE tenant_id=$1 AND "
+                                        "task_type='draft.strong' AND enabled LIMIT 1", tenant)
+            obj, cost, _w = await _llm_json(llm, ci.llm_variants_messages(principle, brand, facts, per_keeper), route)
+            llm_cost += cost
+            if obj is None:
+                llm_warnings.append(f"LLM variant call failed (model={route}): {'; '.join(_w)[:160]} — used rules fallback")
+            generated, rej = ci.validate_llm_variants(obj, k["headline"], qa_content)
+            rejected_all += rej
+        if generated:
+            plan = [{**g, "positioning_note": "LLM-written from an extracted principle (not the source copy)",
+                     "hypothesis": True, "source": "llm"} for g in generated]
+        else:   # deterministic fallback keeps the pipeline alive without a model
+            plan = [{**ci.evolve_variant({}, brand, origin, angle=a), "source": "rules"}
+                    for a in ci.candidate_angles(origin, per_keeper)]
+        for v in plan:
+            angle = v.get("angle", "angle")
             name = f"{brand['industry']} [{angle}] {ci.content_hash(k['headline'], v['headline'])[:8]}"
             vid = await conn.fetchval(
                 "INSERT INTO creative_experiments (tenant_id, variant_name, source_evidence_id, audience, "
@@ -130,6 +196,7 @@ async def creative_evolution(conn, job, payload) -> AgentJobResult:
                 "(SELECT 1 FROM creative_experiments WHERE tenant_id=$1 AND variant_name=$2) RETURNING id",
                 tenant, name, k["evidence_id"], inp.get("audience", "local service-area businesses"),
                 json.dumps({"headline": v["headline"], "cta": v["cta"], "angle": angle,
+                            "source": v["source"], "principle": principle,
                             "positioning_note": v["positioning_note"], "hypothesis": True}))
             if vid is not None:
                 created += 1
@@ -141,13 +208,16 @@ async def creative_evolution(conn, job, payload) -> AgentJobResult:
                 "rights_json = EXCLUDED.rights_json, supporting_evidence_uuids = EXCLUDED.supporting_evidence_uuids",
                 tenant, pb["name"], pb["industry"], json.dumps(pb["playbook_json"]),
                 json.dumps([str(k["id"])]), pb["evidence_level"], json.dumps(pb["rights_json"]))
-            variants.append({"experiment_id": str(vid) if vid else None, "angle": angle,
+            variants.append({"experiment_id": str(vid) if vid else None, "angle": angle, "source": v["source"],
                              "headline": v["headline"], "cta": v["cta"], "new": vid is not None})
     return AgentJobResult(
         status="succeeded",
+        cost_usd=llm_cost,
         structured_output={"variants": variants, "created": created, "brand": brand,
+                           "llm_rejected": rejected_all,
+                           "llm_used": any(x.get("source") == "llm" for x in variants),
                            "hypothesis_note": "all variants are hypotheses to test, not winners"},
-        warnings=[] if keepers else ["no A/B keepers yet — run campaign_hunter first"],
+        warnings=llm_warnings + ([] if keepers else ["no A/B keepers yet — run campaign_hunter first"]),
         recommended_next_actions=["ab_test_designer: test these variants head-to-head",
                                   "content_qa + approval before any asset is built from a variant"])
 
