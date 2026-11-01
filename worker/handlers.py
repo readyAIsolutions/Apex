@@ -481,6 +481,62 @@ async def close_engagement(conn, job, payload) -> AgentJobResult:
                           recommended_next_actions=["approve + execute to win the opportunity"])
 
 
+def _pr_score(candidate: dict, industry: str, region: str) -> int:
+    """Deterministic relevance score from PROVIDED fields only — no fabricated metrics."""
+    terms = candidate.get("relevance_terms") or []
+    hay = " ".join([*(terms or []), candidate.get("publisher", "")]).lower()
+    needles = [w for w in (industry + " " + region).split() if len(w) > 2]
+    return sum(1 for w in needles if w in hay)
+
+
+async def pr_prospecting(conn, job, payload) -> AgentJobResult:
+    """§4 §11 P2 Workflow E — PR/backlinks: evidence-based, disclosed-only, no purchased ranks.
+
+    Hard rule: a PAID placement without an explicit disclosure flag is REFUSED.
+    Only publisher candidates supplied by the operator are considered (no fabricated
+    publisher lists or authority scores).
+    """
+    from app.services import approvals as approvals_service
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    i = (inp or {}).get("input", {})
+    candidates = i.get("candidates") or []
+    if not candidates:
+        return AgentJobResult(status="not_configured",
+                              warnings=["pass input.candidates (publisher, url, relevance_terms, paid_required, paid_disclosed, evidence_ref)"])
+    industry = i.get("industry", "restoration")
+    region = i.get("region", "CA-AB")
+    processed, blocked = [], []
+    warnings = []
+    for c in candidates:
+        publisher = c.get("publisher") or "?"
+        if c.get("paid_required") and not c.get("paid_disclosed"):
+            blocked.append({"publisher": publisher,
+                            "reason": "paid placement without disclosure — refused (no purchased undisclosed links)",
+                            "url": c.get("url")})
+            continue
+        if not c.get("evidence_ref"):
+            warnings.append(f"{publisher}: no evidence_ref — score provisional, never for ranking/authority decisions")
+        score = _pr_score(c, industry, region)
+        asset = await conn.fetchrow(
+            "INSERT INTO content_assets (tenant_id, kind, status) VALUES ($1,'link','draft') RETURNING id",
+            payload["tenant_id"])
+        approval = await approvals_service.create_approval(
+            conn, payload["tenant_id"], "publish:link",
+            {"asset_id": str(asset["id"]), "publisher": publisher, "url": c.get("url"),
+             "paid_disclosed": bool(c.get("paid_disclosed")), "relevance": score,
+             "evidence_ref": c.get("evidence_ref")})
+        processed.append({"approval_id": str(approval["id"]), "asset_id": str(asset["id"]),
+                          "publisher": publisher, "url": c.get("url"), "relevance": score,
+                          "paid_disclosed": bool(c.get("paid_disclosed"))})
+    return AgentJobResult(status="succeeded",
+                          structured_output={"processed": processed, "blocked": blocked},
+                          warnings=warnings,
+                          recommended_next_actions=[p["approval_id"] and
+                              f"approve + execute {p['publisher']} (publish:link)" for p in processed])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
@@ -492,5 +548,6 @@ HANDLERS = {
     "podcast_producer": podcast_producer,
     "proposal_draft": proposal_draft,
     "close_engagement": close_engagement,
+    "pr_prospecting": pr_prospecting,
     "crm_sync": crm_sync,
 }

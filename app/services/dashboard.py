@@ -30,9 +30,12 @@ async def overview(conn, tenant_id) -> dict:
         "SELECT source, count(*)::int AS wins FROM opportunity_attribution "
         "WHERE tenant_id = $1 GROUP BY source ORDER BY wins DESC", tenant_id)]
     wins_by_campaign = [dict(r) for r in await conn.fetch(
-        "SELECT COALESCE(c.name, 'n/a') AS campaign, count(*)::int AS wins "
+        "SELECT COALESCE(c.name, 'unknown') AS campaign, count(*)::int AS wins "
         "FROM opportunity_attribution a LEFT JOIN campaigns c ON c.id = a.campaign_id "
         "WHERE a.tenant_id = $1 GROUP BY c.name ORDER BY wins DESC", tenant_id)]
+    referral_links = await conn.fetchval(
+        "SELECT count(*) FROM publications WHERE tenant_id = $1 AND platform = 'link'",
+        tenant_id)
 
     return {
         "as_of": datetime.now(timezone.utc).isoformat(),
@@ -46,6 +49,7 @@ async def overview(conn, tenant_id) -> dict:
         "contribution_margin_usd": float(margin or 0),
         "wins_by_source": wins_by_source,
         "wins_by_campaign": wins_by_campaign,
+        "referral_links": int(referral_links or 0),
         "caveats": [
             "attribution: first-touch UTM only",
             "phone/offline lead join not yet reconciled",

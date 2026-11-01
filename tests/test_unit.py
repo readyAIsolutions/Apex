@@ -248,3 +248,10 @@ def test_podcast_permission_hard_stop():
     assert _podcast_permission_ok(None)[0] is False
     assert _podcast_permission_ok({"likeness": "ref:l"})[0] is False
     assert _podcast_permission_ok({"likeness": "ref:l", "voice": "ref:v"})[0] is True
+
+
+def test_pr_score_honest():
+    from worker.handlers import _pr_score
+    assert _pr_score({"publisher": "lloydminster journal",
+                      "relevance_terms": ["restoration", "contractor"]}, "restoration", "AB") >= 1
+    assert _pr_score({"publisher": "unrelated blog"}, "restoration", "AB") == 0

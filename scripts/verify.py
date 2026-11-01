@@ -90,7 +90,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (12)", len(rows) == 12, ", ".join(r["file"] for r in rows))
+    check("migrations applied (13)", len(rows) == 13, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -247,6 +247,7 @@ async def main():
     check("seed contacts available for nurture flow", bool(demo_cid) and bool(optout_cid))
     em_jobs = {}
     pod_jobs = {}
+    pr_job = None
 
     with TestClientCompat(create_app()) as client:
         whkey = f"verify:wh:{uuid.uuid4().hex[:8]}"
@@ -428,6 +429,32 @@ async def main():
                                    "idempotency_key": f"verify:{tag}:{uuid.uuid4().hex[:8]}"})
             pod_jobs[tag] = jr.json().get("id") if jr.status_code == 202 else None
         check("podcast jobs enqueued", all(pod_jobs.values()), str(pod_jobs))
+
+        # --- PR/link prospecting job (Workflow E) ---
+        pr_inp = {"industry": "restoration", "region": "CA-AB",
+                  "candidates": [
+                      {"publisher": "Lloydminster Journal",
+                       "url": "https://lloydjournal.example/business",
+                       "relevance_terms": ["restoration", "construction"],
+                       "evidence_ref": "ref:contact-2026-10-01",
+                       "paid_required": True, "paid_disclosed": False},
+                      {"publisher": "TradeWire Restoration",
+                       "url": "https://tradewire.example/r",
+                       "relevance_terms": ["restoration", "contractor"],
+                       "evidence_ref": "ref:listing-2026-10-15"},
+                      {"publisher": "Edmonton Business Post",
+                       "url": "https://post.example/sponsored",
+                       "relevance_terms": ["restoration"],
+                       "evidence_ref": "ref:media-kit-2026-10-20",
+                       "paid_required": True, "paid_disclosed": True},
+                  ]}
+        pj = client.post("/v1/agents/jobs",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"agent": "pr_prospecting", "goal": "PR prospects",
+                               "input": pr_inp,
+                               "idempotency_key": f"verify:pr:{uuid.uuid4().hex[:8]}"})
+        pr_job = pj.json().get("id") if pj.status_code == 202 else None
+        check("PR prospecting job enqueued", bool(pr_job))
 
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
@@ -711,6 +738,35 @@ async def main():
     check("opportunity closed-won with contract economics",
           wrow["stage"] == "won" and float(wrow["actual_value"]) == 4500
           and float(wrow["margin"]) == 2700, str(wrow))
+
+    print("== 9e. PR/link prospecting E2E (Workflow E: disclosure rule + receipts) ==")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        rpr = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1", UUID(pr_job))
+        opr = json.loads(rpr["output_json"])["structured_output"]
+        pr_blocked = opr.get("blocked") or []
+        pr_processed = opr.get("processed") or []
+    check("undisclosed paid placement refused",
+          any("disclosure" in (b.get("reason") or "") for b in pr_blocked), str(pr_blocked)[:90])
+    check("earned + disclosed placements processed", len(pr_processed) == 2,
+          f"{len(pr_processed)} prospects")
+    ex_oks = []
+    with TestClientCompat(create_app()) as client:
+        for pr_ in pr_processed:
+            client.post(f"/v1/approvals/{pr_['approval_id']}/decision",
+                        headers={"Authorization": "Bearer apex_dev_approver_key"},
+                        json={"decision": "approve"})
+            er = client.post(f"/v1/actions/{pr_['approval_id']}/execute",
+                             headers={"Authorization": "Bearer apex_dev_executor_key"})
+            ex_oks.append(er.status_code == 200
+                          and er.json().get("receipt", {}).get("platform") == "link")
+    check("link placements published with receipts", all(ex_oks), str(ex_oks))
+    async with app_scope(TENANT_AIMBEX) as conn:
+        links = await conn.fetch(
+            "SELECT platform, external_id FROM publications "
+            "WHERE tenant_id = $1 AND platform = 'link' ORDER BY published_at DESC LIMIT 5",
+            TENANT_AIMBEX)
+    check("referral receipts recorded (earned + disclosed)", len(links) >= 2,
+          f"{len(links)} link receipts")
 
     print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
     from app.services import backup as backup_svc
