@@ -90,7 +90,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (13)", len(rows) == 13, ", ".join(r["file"] for r in rows))
+    check("migrations applied (14)", len(rows) == 14, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -248,6 +248,8 @@ async def main():
     em_jobs = {}
     pod_jobs = {}
     pr_job = None
+    cgo_job = None
+    soc_job = None
 
     with TestClientCompat(create_app()) as client:
         whkey = f"verify:wh:{uuid.uuid4().hex[:8]}"
@@ -455,6 +457,22 @@ async def main():
                                "idempotency_key": f"verify:pr:{uuid.uuid4().hex[:8]}"})
         pr_job = pj.json().get("id") if pj.status_code == 202 else None
         check("PR prospecting job enqueued", bool(pr_job))
+
+        # --- CGO weekly plan + social distribution jobs ---
+        cj = client.post("/v1/agents/jobs",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"agent": "cgo_plan", "goal": "Weekly growth plan",
+                               "input": {},
+                               "idempotency_key": f"verify:cgo:{uuid.uuid4().hex[:8]}"})
+        cgo_job = cj.json().get("id") if cj.status_code == 202 else None
+        sj = client.post("/v1/agents/jobs",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"agent": "social_distribute", "goal": "Share published article",
+                               "input": {"asset_id": str(gate_asset_id),
+                                         "platforms": ["linkedin", "facebook"]},
+                               "idempotency_key": f"verify:soc:{uuid.uuid4().hex[:8]}"})
+        soc_job = sj.json().get("id") if sj.status_code == 202 else None
+        check("CGO + social jobs enqueued", bool(cgo_job) and bool(soc_job))
 
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
@@ -767,6 +785,46 @@ async def main():
             TENANT_AIMBEX)
     check("referral receipts recorded (earned + disclosed)", len(links) >= 2,
           f"{len(links)} link receipts")
+
+    print("== 9f. CGO plan + concierge escalation + social distribution ==")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        rc = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1", UUID(cgo_job))
+        rs = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1", UUID(soc_job))
+        oc = json.loads(rc["output_json"])["structured_output"]
+        osoc = json.loads(rs["output_json"])["structured_output"]
+        esc = await leads_svc.ingest_lead(
+            conn, TENANT_AIMBEX,
+            LeadEventIn(source="phone", event_key=f"verify:esc:{uuid.uuid4().hex[:8]}",
+                        full_name="Emergency Caller", email=f"esc{uuid.uuid4().hex[:6]}@example.com",
+                        message="emergency flood in the basement right now"), crm_adapter=None)
+        esc_hr = await conn.fetchval(
+            "SELECT human_review FROM opportunities WHERE id = $1",
+            UUID(esc.get("opportunity_id")))
+        f_hr = await conn.fetchval(
+            "SELECT human_review FROM opportunities WHERE id = $1", f_opp)
+    check("CGO plan refuses scale on tiny sample",
+          oc.get("spend_verdict") == "refuse_scale", f"verdict={oc.get('spend_verdict')}")
+    check("CGO plan has priorities + no auto actions",
+          len(oc.get("priorities") or []) >= 5 and oc.get("no_auto_actions") is True,
+          f"{len(oc.get('priorities') or [])} priorities")
+    soc_apprs = osoc.get("approvals") or []
+    check("social posts derived with UTM",
+          len(soc_apprs) == 2 and all("utm_source=" in a["post"] for a in soc_apprs),
+          f"{len(soc_apprs)} posts")
+    ok_s = []
+    with TestClientCompat(create_app()) as client:
+        for a in soc_apprs:
+            client.post(f"/v1/approvals/{a['approval_id']}/decision",
+                        headers={"Authorization": "Bearer apex_dev_approver_key"},
+                        json={"decision": "approve"})
+            er = client.post(f"/v1/actions/{a['approval_id']}/execute",
+                             headers={"Authorization": "Bearer apex_dev_executor_key"})
+            ok_s.append(er.status_code == 200
+                        and er.json().get("receipt", {}).get("platform") == "social")
+    check("social receipts recorded per platform", all(ok_s), str(ok_s))
+    check("urgent lead escalates to human", esc.get("escalated") is True and esc_hr is True,
+          str(esc)[:90])
+    check("regular lead not escalated", f_hr is False, f"funnel opp human_review={f_hr}")
 
     print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
     from app.services import backup as backup_svc

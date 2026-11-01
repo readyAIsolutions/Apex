@@ -537,6 +537,98 @@ async def pr_prospecting(conn, job, payload) -> AgentJobResult:
                               f"approve + execute {p['publisher']} (publish:link)" for p in processed])
 
 
+def _social_post(asset_title: str, platform: str, base_url: str = "https://aimbex.example/") -> dict:
+    """Deterministic platform post + UTM trackable link (no fabricated social claims)."""
+    utm = {"utm_source": platform, "utm_medium": "social", "utm_campaign": "content"}
+    text = (f"{asset_title} — real talk on missed-call economics for restoration firms. "
+            f"Read: {base_url}?utm_source={platform}&utm_medium=social&utm_campaign=content")
+    return {"platform": platform, "text": text, "utm": utm}
+
+
+async def cgo_plan(conn, job, payload) -> AgentJobResult:
+    """§3 Chief Growth Officer — prioritized weekly growth plan, read-only stance.
+
+    Aggregates the reconciled dashboard and returns a deterministic weekly plan.
+    Never proposes spend scale-ups when the optimizer would refuse; never publishes
+    or purchases anything (read + plan only, per §3 hard stops).
+    """
+    import datetime
+    from app.services import dashboard as dashboard_service
+    from app.services.paymedia import evaluate_campaign
+    ov = await dashboard_service.overview(conn, uuid.UUID(payload["tenant_id"]))
+    spend = ov["spend_usd"]
+    qualified = ov["qualified_leads"]
+    wins = ov["wins"]
+    revenue = ov["recognized_revenue_usd"] or 0
+    margin = ov["contribution_margin_usd"] or 0
+    verdict = evaluate_campaign(spend_usd=spend, qualified_leads=qualified, wins=wins,
+                               first_sale_usd=(revenue / wins) if wins else None,
+                               margin_usd=margin, budget_cap_usd=250000)
+    priorities = [
+        "1. Reconcile attribution gaps (phone/offline join) before any scale decision",
+        "2. Publish evidence-backed answers from the question store (QA + approval gates)",
+        "3. Nurture booked-no-show list with consent-respecting follow-up",
+        "4. Review publisher shortlist through pr_prospecting (disclosure rule enforced)",
+        "5. Capacitate the pilot funnel: bookings -> proposal -> signed -> invoice dashboards",
+    ]
+    week = datetime.date.today().isoformat()
+    return AgentJobResult(
+        status="succeeded",
+        structured_output={
+            "week": week,
+            "spend_usd": spend, "qualified_leads": qualified, "wins": wins,
+            "cac": ov["cost_per_qualified_lead"],
+            "spend_verdict": verdict["status"],
+            "spend_reasons": verdict["reasons"],
+            "priorities": priorities,
+            "assigned_agents": ["attribution", "content_writer", "email_nurture",
+                                "pr_prospecting", "proposal_draft"],
+            "no_auto_actions": True,
+        },
+        confidence=0.9,
+        recommended_next_actions=([] if verdict["status"] == "refuse_scale"
+                                  else ["run capped tests within the approved ceiling"]))
+
+
+async def social_distribute(conn, job, payload) -> AgentJobResult:
+    """§3 Social Distributor — platform posts + UTM receipts for a PUBLISHED asset."""
+    from app.services import approvals as approvals_service
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    i = (inp or {}).get("input", {})
+    asset_id = i.get("asset_id")
+    platforms = i.get("platforms") or ["linkedin"]
+    if not asset_id:
+        return AgentJobResult(status="not_configured",
+                              warnings=["pass input.asset_id (a PUBLISHED asset) + platforms"])
+    try:
+        aid = uuid.UUID(asset_id)
+    except ValueError:
+        return AgentJobResult(status="failed", structured_output={"error": "bad asset id"})
+    asset = await conn.fetchrow(
+        "SELECT id, status FROM content_assets WHERE id = $1 AND tenant_id = $2",
+        aid, payload["tenant_id"])
+    if asset is None or asset["status"] != "published":
+        return AgentJobResult(
+            status="succeeded", structured_output={"blocked": "asset_not_published"},
+            warnings=["social distribution requires a PUBLISHED asset"],
+            recommended_next_actions=["publish the asset first (submit -> approve -> execute)"])
+    title = f"AI receptionist for restoration firms"
+    approvals = []
+    for p in platforms:
+        post = _social_post(title, p)
+        appr = await approvals_service.create_approval(
+            conn, payload["tenant_id"], "publish:social",
+            {"asset_id": str(aid), **post})
+        approvals.append({"platform": p, "approval_id": str(appr["id"]),
+                          "post": post["text"]})
+    return AgentJobResult(status="succeeded",
+                          structured_output={"approvals": approvals, "blocked": None},
+                          recommended_next_actions=[
+                              f"approve + execute {a['platform']}" for a in approvals])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
@@ -549,5 +641,7 @@ HANDLERS = {
     "proposal_draft": proposal_draft,
     "close_engagement": close_engagement,
     "pr_prospecting": pr_prospecting,
+    "cgo_plan": cgo_plan,
+    "social_distribute": social_distribute,
     "crm_sync": crm_sync,
 }

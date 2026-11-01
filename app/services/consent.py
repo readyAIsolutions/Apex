@@ -4,6 +4,15 @@ from typing import Optional
 
 from fastapi import HTTPException
 
+URGENT_TERMS = ["emergency", "flood", "fire", "leak", "burst", "asap", "urgent",
+                "right now", "immediately", "24/7", "24-7"]
+
+
+def is_urgent(message: str) -> bool:
+    """Workflow B: urgent/sensitive cases transfer to a HUMAN — no auto-booking."""
+    text = (message or "").lower()
+    return any(t in text for t in URGENT_TERMS)
+
 
 async def record_consent(conn, tenant_id, contact_id: uuid.UUID, channel: str,
                          basis: str, status: str, proof_ref: Optional[str] = None) -> dict:

@@ -9,6 +9,7 @@ from typing import Optional
 
 from app.db import audit
 from app.schemas import LeadEventIn
+from app.services.consent import is_urgent
 
 
 def _email_hash(email: Optional[str]) -> Optional[str]:
@@ -77,6 +78,14 @@ async def ingest_lead(conn, tenant_id, event: LeadEventIn, crm_adapter=None,
         "INSERT INTO opportunities (tenant_id, contact_id, stage) VALUES ($1, $2, 'new') RETURNING id",
         tenant_id, contact_id)
 
+    # 5b) Lead Concierge: urgent/sensitive -> HUMAN transfer, no auto-booking (Workflow B)
+    escalated = is_urgent(event.message or "")
+    if escalated:
+        await conn.execute(
+            "UPDATE opportunities SET human_review = true WHERE id = $1", opp["id"])
+        await audit(conn, tenant_id, actor, "lead.escalated.human", "opportunities", opp["id"],
+                    {"reason": "urgent_sensitive", "terms_hint": (event.message or "")[:80]})
+
     # 6) CRM mirror via adapter (Odoo default; health-checked, fail-closed)
     crm_external_id = None
     if crm_adapter is not None:
@@ -97,7 +106,8 @@ async def ingest_lead(conn, tenant_id, event: LeadEventIn, crm_adapter=None,
     await audit(conn, tenant_id, actor, "lead.ingested", "lead_events", None,
                 {"event_key": event.event_key, "source": event.source})
     return {"processed": True, "duplicate": False, "contact_id": str(contact_id),
-            "crm_external_id": crm_external_id}
+            "crm_external_id": crm_external_id, "opportunity_id": str(opp["id"]),
+            "escalated": escalated}
 
 
 async def schedule_appointment(conn, tenant_id, contact_id: uuid.UUID, opportunity_id: uuid.UUID,

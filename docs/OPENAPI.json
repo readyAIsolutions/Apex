@@ -1,0 +1,1660 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "APEX COMMAND AI",
+  "description": "AIMBEX lead-to-margin automation. Odoo CRM (no HighLevel), swappable provider adapters, RLS multi-tenant, approval-gated execution.",
+  "version": "0.1.0"
+ },
+ "paths": {
+  "/healthz": {
+   "get": {
+    "tags": [
+     "ops"
+    ],
+    "summary": "Healthz",
+    "operationId": "healthz_healthz_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/ready": {
+   "get": {
+    "tags": [
+     "ops"
+    ],
+    "summary": "Ready",
+    "operationId": "ready_ready_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/leads/events": {
+   "post": {
+    "tags": [
+     "leads"
+    ],
+    "summary": "Ingest Lead",
+    "operationId": "ingest_lead_v1_leads_events_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/LeadEventIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/leads/{contact_id}/appointments": {
+   "post": {
+    "tags": [
+     "leads"
+    ],
+    "summary": "Book Appointment",
+    "description": "Workflow B (\u00a75): offer/lock an approved consultation slot (Odoo calendar mirror).",
+    "operationId": "book_appointment_v1_leads__contact_id__appointments_post",
+    "parameters": [
+     {
+      "name": "contact_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Contact Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AppointmentCreate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/dashboard/overview": {
+   "get": {
+    "tags": [
+     "dashboard"
+    ],
+    "summary": "Overview",
+    "operationId": "overview_v1_dashboard_overview_get",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/questions/research": {
+   "post": {
+    "tags": [
+     "questions"
+    ],
+    "summary": "Research",
+    "operationId": "research_v1_questions_research_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ResearchRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/seo/audit": {
+   "post": {
+    "tags": [
+     "seo"
+    ],
+    "summary": "Seo Audit Sync",
+    "operationId": "seo_audit_sync_v1_seo_audit_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SeoAuditIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/qa/content": {
+   "post": {
+    "tags": [
+     "qa"
+    ],
+    "summary": "Qa Content Endpoint",
+    "description": "Pre-approval check of draft copy: banned outcome promises, uncited stats, consent.",
+    "operationId": "qa_content_endpoint_v1_qa_content_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/QaContentIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/ads/optimizer/recommend": {
+   "get": {
+    "tags": [
+     "ads"
+    ],
+    "summary": "Recommend",
+    "description": "Recommendation for a single campaign: spend, CAC, wins and an honest scale verdict.\nRefuses unsafe increases (tiny sample / CAC past ceiling / budget breach).",
+    "operationId": "recommend_v1_ads_optimizer_recommend_get",
+    "parameters": [
+     {
+      "name": "campaign_id",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Campaign Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/campaigns": {
+   "post": {
+    "tags": [
+     "campaigns"
+    ],
+    "summary": "Create Campaign",
+    "operationId": "create_campaign_v1_campaigns_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CampaignCreate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "get": {
+    "tags": [
+     "campaigns"
+    ],
+    "summary": "List Campaigns",
+    "operationId": "list_campaigns_v1_campaigns_get",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/campaigns/{campaign_id}/budget": {
+   "post": {
+    "tags": [
+     "campaigns"
+    ],
+    "summary": "Change Budget",
+    "description": "Optimizer-guarded budget change (\u00a710): increases are refused unless the\nrecommend-only optimizer would permit scale (sample size, CAC vs first-sale,\nmargin). Reductions/safe changes always pass.",
+    "operationId": "change_budget_v1_campaigns__campaign_id__budget_post",
+    "parameters": [
+     {
+      "name": "campaign_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Campaign Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BudgetChange"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/campaigns/{campaign_id}/spend": {
+   "post": {
+    "tags": [
+     "campaigns"
+    ],
+    "summary": "Record Spend",
+    "description": "Inbound spend reconciliation (\u00a710): providers report what they actually spent;\nidempotent per (campaign, date, provider_ref). Recording is not a spend decision \u2014\nthe optimizer governs increases.",
+    "operationId": "record_spend_v1_campaigns__campaign_id__spend_post",
+    "parameters": [
+     {
+      "name": "campaign_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Campaign Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SpendIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/agents/jobs": {
+   "post": {
+    "tags": [
+     "agents"
+    ],
+    "summary": "Create Agent Job",
+    "operationId": "create_agent_job_v1_agents_jobs_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AgentJobEnvelope"
+       }
+      }
+     }
+    },
+    "responses": {
+     "202": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/agents/jobs/{job_id}": {
+   "get": {
+    "tags": [
+     "agents"
+    ],
+    "summary": "Get Agent Job",
+    "operationId": "get_agent_job_v1_agents_jobs__job_id__get",
+    "parameters": [
+     {
+      "name": "job_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Job Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/assets": {
+   "post": {
+    "tags": [
+     "assets"
+    ],
+    "summary": "Create Asset",
+    "description": "Create a draft content asset (drafts are internal until submitted for approval).",
+    "operationId": "create_asset_v1_assets_post",
+    "parameters": [
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AssetCreate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/assets/{asset_id}/submit": {
+   "post": {
+    "tags": [
+     "assets"
+    ],
+    "summary": "Submit Asset",
+    "operationId": "submit_asset_v1_assets__asset_id__submit_post",
+    "parameters": [
+     {
+      "name": "asset_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Asset Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AssetSubmitIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/approvals": {
+   "get": {
+    "tags": [
+     "approvals"
+    ],
+    "summary": "List Approvals",
+    "description": "Operator queue: what's awaiting a human decision (publish/send/spend gates).",
+    "operationId": "list_approvals_v1_approvals_get",
+    "parameters": [
+     {
+      "name": "state",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "string",
+       "default": "pending",
+       "title": "State"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/approvals/{approval_id}/decision": {
+   "post": {
+    "tags": [
+     "approvals"
+    ],
+    "summary": "Decide",
+    "operationId": "decide_v1_approvals__approval_id__decision_post",
+    "parameters": [
+     {
+      "name": "approval_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Approval Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ApprovalDecisionIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/actions/{action_id}/execute": {
+   "post": {
+    "tags": [
+     "actions"
+    ],
+    "summary": "Execute Action",
+    "operationId": "execute_action_v1_actions__action_id__execute_post",
+    "parameters": [
+     {
+      "name": "action_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Action Id"
+      }
+     },
+     {
+      "name": "authorization",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Authorization"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/webhooks/{provider}": {
+   "post": {
+    "tags": [
+     "webhooks"
+    ],
+    "summary": "Webhook",
+    "operationId": "webhook_v1_webhooks__provider__post",
+    "parameters": [
+     {
+      "name": "provider",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Provider"
+      }
+     },
+     {
+      "name": "x-tenant-id",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Tenant-Id"
+      }
+     },
+     {
+      "name": "x-apex-signature",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Apex-Signature"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "AgentJobEnvelope": {
+    "properties": {
+     "tenant_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tenant Id"
+     },
+     "job_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Job Id"
+     },
+     "agent": {
+      "type": "string",
+      "title": "Agent"
+     },
+     "goal": {
+      "type": "string",
+      "title": "Goal"
+     },
+     "input_refs": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Input Refs",
+      "default": []
+     },
+     "input": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Input"
+     },
+     "constraints": {
+      "$ref": "#/components/schemas/EnvelopeConstraints",
+      "default": {
+       "max_cost_usd": 0.1,
+       "region": "CA-AB"
+      }
+     },
+     "approval_policy": {
+      "type": "string",
+      "title": "Approval Policy",
+      "default": "draft_only"
+     },
+     "idempotency_key": {
+      "type": "string",
+      "title": "Idempotency Key"
+     }
+    },
+    "type": "object",
+    "required": [
+     "agent",
+     "goal",
+     "idempotency_key"
+    ],
+    "title": "AgentJobEnvelope",
+    "description": "Common envelope for every agent (blueprint \u00a73)."
+   },
+   "AppointmentCreate": {
+    "properties": {
+     "starts_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Starts At"
+     }
+    },
+    "type": "object",
+    "title": "AppointmentCreate"
+   },
+   "ApprovalDecisionIn": {
+    "properties": {
+     "decision": {
+      "type": "string",
+      "title": "Decision"
+     }
+    },
+    "type": "object",
+    "required": [
+     "decision"
+    ],
+    "title": "ApprovalDecisionIn"
+   },
+   "AssetCreate": {
+    "properties": {
+     "kind": {
+      "type": "string",
+      "title": "Kind",
+      "default": "article"
+     },
+     "campaign_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Campaign Id"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     }
+    },
+    "type": "object",
+    "title": "AssetCreate"
+   },
+   "AssetSubmitIn": {
+    "properties": {
+     "platform": {
+      "type": "string",
+      "title": "Platform"
+     },
+     "publish_action": {
+      "type": "string",
+      "title": "Publish Action",
+      "default": "publish"
+     },
+     "text": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Text"
+     },
+     "force": {
+      "type": "boolean",
+      "title": "Force",
+      "default": false
+     },
+     "extra": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Extra",
+      "default": {}
+     }
+    },
+    "type": "object",
+    "required": [
+     "platform"
+    ],
+    "title": "AssetSubmitIn"
+   },
+   "BudgetChange": {
+    "properties": {
+     "budget_cap_minor": {
+      "type": "integer",
+      "minimum": 0.0,
+      "title": "Budget Cap Minor"
+     }
+    },
+    "type": "object",
+    "required": [
+     "budget_cap_minor"
+    ],
+    "title": "BudgetChange"
+   },
+   "CampaignCreate": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "channel": {
+      "type": "string",
+      "title": "Channel"
+     },
+     "objective": {
+      "type": "string",
+      "title": "Objective",
+      "default": "qualified_lead"
+     },
+     "budget_cap_minor": {
+      "type": "integer",
+      "minimum": 0.0,
+      "title": "Budget Cap Minor",
+      "default": 0
+     },
+     "status": {
+      "type": "string",
+      "title": "Status",
+      "default": "draft"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "channel"
+    ],
+    "title": "CampaignCreate"
+   },
+   "EnvelopeConstraints": {
+    "properties": {
+     "max_cost_usd": {
+      "type": "number",
+      "minimum": 0.0,
+      "title": "Max Cost Usd",
+      "default": 0.1
+     },
+     "region": {
+      "type": "string",
+      "title": "Region",
+      "default": "CA-AB"
+     }
+    },
+    "type": "object",
+    "title": "EnvelopeConstraints"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "LeadEventIn": {
+    "properties": {
+     "source": {
+      "type": "string",
+      "title": "Source"
+     },
+     "event_key": {
+      "type": "string",
+      "title": "Event Key"
+     },
+     "full_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Full Name"
+     },
+     "email": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Email"
+     },
+     "phone": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Phone"
+     },
+     "campaign_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Campaign Id"
+     },
+     "utm": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object",
+      "title": "Utm",
+      "default": {}
+     },
+     "occurred_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Occurred At"
+     },
+     "message": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Message"
+     }
+    },
+    "type": "object",
+    "required": [
+     "source",
+     "event_key"
+    ],
+    "title": "LeadEventIn"
+   },
+   "QaContentIn": {
+    "properties": {
+     "text": {
+      "type": "string",
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "required": [
+     "text"
+    ],
+    "title": "QaContentIn"
+   },
+   "ResearchRequest": {
+    "properties": {
+     "industry": {
+      "type": "string",
+      "title": "Industry"
+     },
+     "locale": {
+      "type": "string",
+      "title": "Locale",
+      "default": "CA-AB"
+     },
+     "scope": {
+      "additionalProperties": true,
+      "type": "object",
+      "title": "Scope",
+      "default": {}
+     },
+     "cost_cap_usd": {
+      "type": "number",
+      "minimum": 0.0,
+      "title": "Cost Cap Usd",
+      "default": 0.2
+     }
+    },
+    "type": "object",
+    "required": [
+     "industry"
+    ],
+    "title": "ResearchRequest"
+   },
+   "SeoAuditIn": {
+    "properties": {
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     },
+     "html": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Html"
+     }
+    },
+    "type": "object",
+    "title": "SeoAuditIn"
+   },
+   "SpendIn": {
+    "properties": {
+     "spend_date": {
+      "type": "string",
+      "format": "date",
+      "title": "Spend Date"
+     },
+     "spend_minor": {
+      "type": "integer",
+      "minimum": 0.0,
+      "title": "Spend Minor"
+     },
+     "currency": {
+      "type": "string",
+      "title": "Currency",
+      "default": "CAD"
+     },
+     "provider_ref": {
+      "type": "string",
+      "title": "Provider Ref"
+     }
+    },
+    "type": "object",
+    "required": [
+     "spend_minor",
+     "provider_ref"
+    ],
+    "title": "SpendIn"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   }
+  }
+ }
+}

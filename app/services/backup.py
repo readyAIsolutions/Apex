@@ -22,6 +22,10 @@ KEEP = 7
 # from the snapshot itself.
 SCHEMA_MIGRATIONS = ["0001_init.sql", "0002_crm.sql", "0003_marketing.sql", "0004_jobs.sql",
                      "0005_rls_roles.sql", "0007_auth_lookup.sql", "0009_opportunity_attribution.sql"]
+# NOTE: never add data-seeding migrations (route seeds, e.g. 0008/0010-0014) to
+# SCHEMA_MIGRATIONS — they FK-insert rows that assume a TENANT already exists, and in a
+# fresh restore tenants come from the snapshot, not migrations. Apply schema-only
+# statements inline (see human_review ALTER below) and let the snapshot restore data.
 
 TABLES = [
     "tenants", "users", "api_keys", "provider_connections", "provider_routes",
@@ -116,6 +120,10 @@ async def restore_snapshot(path: str, scratch_db: str = "apex_restore_test") -> 
         for name in SCHEMA_MIGRATIONS:
             sql = (MIGRATIONS_DIR / name).read_text()
             await conn.execute(sql)
+        # schema-only tail from post-0009 migrations (data seeds belong to the snapshot)
+        await conn.execute(
+            "ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS "
+            "human_review boolean NOT NULL DEFAULT false")
         restored = {}
         for chunk in chunks:
             t, cols, rows = chunk["table"], chunk["columns"], chunk["rows"]

@@ -255,3 +255,18 @@ def test_pr_score_honest():
     assert _pr_score({"publisher": "lloydminster journal",
                       "relevance_terms": ["restoration", "contractor"]}, "restoration", "AB") >= 1
     assert _pr_score({"publisher": "unrelated blog"}, "restoration", "AB") == 0
+
+
+def test_urgent_transfer_matcher():
+    from app.services.consent import is_urgent
+    assert is_urgent("we have an EMERGENCY flood in the basement") is True
+    assert is_urgent("just checking pricing for next quarter") is False
+
+
+def test_social_post_deterministic():
+    from worker.handlers import _social_post
+    a = _social_post("T", "linkedin")
+    b = _social_post("T", "linkedin")
+    assert a == b
+    assert a["utm"]["utm_source"] == "linkedin"
+    assert "utm_source=linkedin" in a["text"]
