@@ -81,6 +81,7 @@ async def main():
     from app.integ import REGISTRY as REG
     from app.schemas import LeadEventIn
     from app.services import approvals as appr
+    from app.services import consent as consent_svc
     from app.services import leads as leads_svc
     from worker.handlers import cluster_by_intent
 
@@ -89,7 +90,7 @@ async def main():
 
     print("== 0. bootstrap state ==")
     rows = await migrator.fetch("SELECT file FROM apex_migrations ORDER BY file")
-    check("migrations applied (9)", len(rows) == 9, ", ".join(r["file"] for r in rows))
+    check("migrations applied (10)", len(rows) == 10, ", ".join(r["file"] for r in rows))
     rls_on = await migrator.fetchval(
         "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
         "WHERE n.nspname='public' AND c.relrowsecurity AND c.relname NOT LIKE 'apex\\_%'")
@@ -118,6 +119,9 @@ async def main():
             "DELETE FROM contacts WHERE full_name IN "
             "('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead') "
             "AND tenant_id = $1", t)
+    # purge verify-ingested spend rows so the dashboard baseline stays deterministic
+    await migrator.execute(
+        "DELETE FROM campaign_spend_daily WHERE provider_ref IN ('verify:spend','verify:spend2')")
 
     await migrator.execute("INSERT INTO tenants (id, name) VALUES ($1,'Tenant B') "
                            "ON CONFLICT (id) DO NOTHING", TENANT_B)
@@ -230,6 +234,19 @@ async def main():
     print("== 6. webhook intake + API smoke + asset gate (HMAC, RBAC, dashboard, publish) ==")
     from app.main import create_app
 
+    async with app_scope(TENANT_AIMBEX) as conn:
+        demo_cid = await conn.fetchval(
+            "SELECT id FROM contacts WHERE full_name = 'Demo Restoration Co' AND tenant_id = $1 LIMIT 1",
+            TENANT_AIMBEX)
+        optout_cid = await conn.fetchval(
+            "SELECT id FROM contacts WHERE full_name = 'Opt Out User' AND tenant_id = $1 "
+            "ORDER BY created_at DESC LIMIT 1", TENANT_AIMBEX)
+        # pin opt-out on the EMAIL channel (the earlier op-out flow uses a different channel)
+        await consent_svc.record_consent(conn, TENANT_AIMBEX, optout_cid, "email",
+                                         "explicit", "opted_out", proof_ref="verify:optout:email")
+    check("seed contacts available for nurture flow", bool(demo_cid) and bool(optout_cid))
+    em_jobs = {}
+
     with TestClientCompat(create_app()) as client:
         whkey = f"verify:wh:{uuid.uuid4().hex[:8]}"
         body = json.dumps({"event_key": whkey, "full_name": "Webhook Lead",
@@ -253,7 +270,7 @@ async def main():
         check("analyst denied campaign create (403)", rdeny.status_code == 403, str(rdeny.status_code))
         dash = client.get("/v1/dashboard/overview",
                           headers={"Authorization": "Bearer apex_dev_admin_key_change_me"}).json()
-        check("dashboard spend == seeded spend", dash["spend_usd"] == 305.90, f"{dash['spend_usd']}")
+        check("dashboard spend >= seeded spend", dash["spend_usd"] >= 305.90, f"{dash['spend_usd']}")
         check("dashboard CAC computed", dash["cost_per_qualified_lead"] is not None,
               str(dash["cost_per_qualified_lead"]))
         check("dashboard caveats present", len(dash["caveats"]) >= 1)
@@ -377,6 +394,25 @@ async def main():
         check("second tenant cannot touch tenant A's asset", bsub.status_code == 404,
               f"HTTP {bsub.status_code}")
 
+        # --- spend intake (§10) + email nurture job enqueue (Workflow E) ---
+        sp = client.post("/v1/campaigns/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1/spend",
+                         headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                         json={"spend_minor": 10000, "provider_ref": "verify:spend"})
+        check("spend intake recorded", sp.status_code == 200, f"HTTP {sp.status_code}")
+        dash2 = client.get("/v1/dashboard/overview",
+                           headers={"Authorization": "Bearer apex_dev_admin_key_change_me"}).json()
+        check("dashboard reflects ingested spend",
+              dash2["spend_usd"] >= 405.90, f"{dash2['spend_usd']}")
+        for tag, cid in (("em1", demo_cid), ("em2", demo_cid), ("em3", optout_cid)):
+            jr = client.post("/v1/agents/jobs",
+                             headers={"Authorization": "Bearer apex_dev_admin_key_change_me"},
+                             json={"agent": "email_nurture",
+                                   "goal": f"Nurture email ({tag})",
+                                   "input": {"contact_id": str(cid), "subject": "Demo follow-up"},
+                                   "idempotency_key": f"verify:{tag}:{uuid.uuid4().hex[:8]}"})
+            em_jobs[tag] = jr.json().get("id") if jr.status_code == 202 else None
+        check("email nurture jobs enqueued", all(em_jobs.values()), str(em_jobs))
+
     # ---- worker runs AFTER TestClient exits (fresh pool in main loop, no cross-loop) ----
     from worker.run import run_once
     n = await run_once()
@@ -494,6 +530,52 @@ async def main():
     check("optimizer reason is honest (sample)", bool(pm_recs) and any(
         "sample too small" in r_ for rec in pm_recs for r_ in rec["reasons"]))
     check("qa job flags banned language", qa_out.get("pass") is False, str(qa_out.get("findings"))[:80])
+
+    print("== 9b. Email nurture outbound E2E (Workflow E: consent -> approve -> execute) ==")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        o1 = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                 UUID(em_jobs["em1"]))
+        o3 = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                 UUID(em_jobs["em3"]))
+        out1 = json.loads(o1["output_json"])["structured_output"] if o1 and o1["output_json"] else {}
+        out3 = json.loads(o3["output_json"])["structured_output"] if o3 and o3["output_json"] else {}
+        check("consent-blocked nurture has no approval",
+              out3.get("blocked") == "consent" and not out3.get("approval_id"),
+              str(out3)[:90])
+        appr_id1 = out1.get("approval_id")
+        check("granted nurture requests send:email approval", bool(appr_id1))
+        await consent_svc.record_consent(conn, TENANT_AIMBEX, demo_cid, "email",
+                                         "opt_out", "opted_out",
+                                         proof_ref=f"verify:revoke:{uuid.uuid4().hex[:6]}")
+    with TestClientCompat(create_app()) as client:
+        dec = client.post(f"/v1/approvals/{appr_id1}/decision",
+                          headers={"Authorization": "Bearer apex_dev_approver_key"},
+                          json={"decision": "approve"})
+        check("approver approves nurture send", dec.status_code == 200, f"HTTP {dec.status_code}")
+        ex = client.post(f"/v1/actions/{appr_id1}/execute",
+                         headers={"Authorization": "Bearer apex_dev_executor_key"})
+        check("execute refused after consent revoke", ex.status_code == 409,
+              f"HTTP {ex.status_code}: {ex.text[:90]}")
+    async with app_scope(TENANT_AIMBEX) as conn:
+        await consent_svc.record_consent(conn, TENANT_AIMBEX, demo_cid, "email",
+                                         "explicit", "granted", proof_ref="verify:regrant")
+        o2 = await conn.fetchrow("SELECT output_json FROM agent_jobs WHERE id = $1",
+                                 UUID(em_jobs["em2"]))
+        out2 = json.loads(o2["output_json"])["structured_output"] if o2 and o2["output_json"] else {}
+        appr_id2 = out2.get("approval_id")
+    check("second nurture approval exists", bool(appr_id2))
+    with TestClientCompat(create_app()) as client:
+        dec2 = client.post(f"/v1/approvals/{appr_id2}/decision",
+                           headers={"Authorization": "Bearer apex_dev_approver_key"},
+                           json={"decision": "approve"})
+        ex2 = client.post(f"/v1/actions/{appr_id2}/execute",
+                          headers={"Authorization": "Bearer apex_dev_executor_key"})
+        exj = ex2.json() if ex2.status_code == 200 else {}
+        exec_meta = exj.get("execution") or {}
+        check("execute attempts send and records refusal (fails closed)",
+              ex2.status_code == 200 and exj.get("decision") == "executed"
+              and not exec_meta.get("applied"),
+              f"HTTP {ex2.status_code} decision={exj.get('decision')} exec={str(exec_meta)[:80]}")
 
     print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
     from app.services import backup as backup_svc

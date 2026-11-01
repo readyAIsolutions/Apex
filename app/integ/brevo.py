@@ -22,7 +22,7 @@ class BrevoEmailAdapter(ProviderAdapter):
         return ["email.send"]
 
     async def execute(self, op: str, payload: dict) -> AdapterResult:
-        if op != "email.send":
+        if op not in ("email.send", "send:email"):
             return AdapterResult(False, {}, warnings=[f"brevo: unknown op '{op}'"])
         if not self.api_key:
             return AdapterResult(False, {}, warnings=["BREVO_API_KEY not set — send skipped"])

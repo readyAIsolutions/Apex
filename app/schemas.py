@@ -1,6 +1,7 @@
 """Pydantic contracts (§3 agent envelope, §7 API payloads)."""
+import datetime
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime as dt, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -56,7 +57,7 @@ class ConsentRecordIn(BaseModel):
 
 
 class AppointmentCreate(BaseModel):
-    starts_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    starts_at: dt = Field(default_factory=lambda: dt.now(timezone.utc))
 
 
 class ApprovalDecisionIn(BaseModel):
@@ -74,6 +75,12 @@ class CampaignCreate(BaseModel):
 class BudgetChange(BaseModel):
     budget_cap_minor: int = Field(ge=0)
 
+
+class SpendIn(BaseModel):
+    spend_date: datetime.date = Field(default_factory=datetime.date.today)
+    spend_minor: int = Field(ge=0)
+    currency: str = "CAD"
+    provider_ref: str               # provider report id (idempotency key)
 
 class ResearchRequest(BaseModel):
     industry: str

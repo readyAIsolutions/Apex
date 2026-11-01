@@ -283,6 +283,47 @@ async def content_qa(conn, job, payload) -> AgentJobResult:
                           recommended_next_actions=res["recommended_next_actions"])
 
 
+async def email_nurture(conn, job, payload) -> AgentJobResult:
+    """§3 Email/Retention agent (§5 Workflow E): consent-gated nurture.
+
+    Opt-out stops automation here at CREATE time (no approval, no send). If consent is
+    granted, the handler only DRAFTS + requests a 'send:email' human approval — the actual
+    send happens exclusively through the executor, which re-checks consent at EXECUTION
+    time (CASL-safe against revocation between draft and send).
+    """
+    from app.services import approvals as approvals_service
+    from app.services import consent as consent_svc
+    inp = job["input_json"]
+    if isinstance(inp, str):
+        inp = json.loads(inp)
+    contact_id = (inp or {}).get("input", {}).get("contact_id")
+    subject = (inp or {}).get("input", {}).get("subject") or "Follow-up — AI receptionist demo"
+    body = (inp or {}).get("input", {}).get("body") or _template_draft(subject)
+    if not contact_id:
+        return AgentJobResult(status="not_configured", warnings=["no contact_id — pass input.contact_id"],
+                              recommended_next_actions=["provide input.contact_id"])
+    try:
+        cid = uuid.UUID(contact_id)
+    except ValueError:
+        return AgentJobResult(status="failed", structured_output={"error": "invalid contact_id"})
+    if not await consent_svc.is_allowed(conn, cid, "email"):
+        return AgentJobResult(status="succeeded", structured_output={"blocked": "consent"},
+                              warnings=["opt-out stops automation (CASL) — no approval created"],
+                              recommended_next_actions=["respect suppression; no further email"])
+    asset = await conn.fetchrow(
+        "INSERT INTO content_assets (tenant_id, kind, status) VALUES ($1,'email','draft') RETURNING id",
+        payload["tenant_id"])
+    approval = await approvals_service.create_approval(
+        conn, payload["tenant_id"], "send:email",
+        {"asset_id": str(asset["id"]), "contact_id": str(cid), "subject": subject,
+         "body": body, "channel": "email"})
+    return AgentJobResult(
+        status="succeeded",
+        structured_output={"approval_id": str(approval["id"]), "asset_id": str(asset["id"]),
+                            "blocked": None, "channel": "email"},
+        recommended_next_actions=[f"POST /v1/approvals/{approval['id']}/decision -> execute"])
+
+
 HANDLERS = {
     "customer_question_intelligence": research_questions,
     "content_writer": content_draft,
@@ -290,5 +331,6 @@ HANDLERS = {
     "seo_auditor": seo_audit,
     "attribution": attribution,
     "paid_media": paid_media,
+    "email_nurture": email_nurture,
     "crm_sync": crm_sync,
 }

@@ -13,6 +13,7 @@ from app.auth import require_role
 from app.db import TenantScope, audit
 from app.integ import router as provider_router
 from app.services import approvals as approvals_service
+from app.services import consent as consent_svc
 
 router = APIRouter(tags=["actions"])
 
@@ -27,6 +28,26 @@ async def execute_action(action_id: str, principal=Depends(require_role("executo
 
         # route action_type -> adapter (env override first, then provider_routes)
         task_type = approval["action_type"]
+
+        # Outbound sends re-check consent at EXECUTION time (§11 P0: opt-out stops
+        # automation; CASL-safe against revocation between draft and execution).
+        if task_type.startswith("send:"):
+            pl = approval["payload"]
+            if isinstance(pl, str):
+                try:
+                    pl = json.loads(pl)
+                except Exception:
+                    pl = {}
+            cid = (pl or {}).get("contact_id")
+            if cid:
+                allowed = await consent_svc.is_allowed(conn, UUID(cid), "email")
+                if not allowed:
+                    await audit(conn, principal.tenant_id, principal.actor, "action.refused",
+                                "approvals", uid, {"reason": "consent_revoked",
+                                                   "action_type": task_type})
+                    raise HTTPException(
+                        409, "consent revoked at execution time — automation blocked (CASL)")
+
         adapter = None
         try:
             adapter = await provider_router.route(task_type, conn=conn, tenant_id=principal.tenant_id)

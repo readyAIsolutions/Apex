@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import require_role
 from app.db import TenantScope, audit
-from app.schemas import BudgetChange, CampaignCreate
+from app.schemas import BudgetChange, CampaignCreate, SpendIn
 from app.services.paymedia import evaluate_campaign
 
 router = APIRouter(tags=["campaigns"])
@@ -76,3 +76,33 @@ async def change_budget(campaign_id: str, body: BudgetChange,
                     "campaigns", cid, {"increased": increase, "new_minor": body.budget_cap_minor})
     return {"campaign_id": str(cid), "budget_cap_minor": body.budget_cap_minor,
             "increased": increase, "optimizer": optimizer}
+
+
+@router.post("/campaigns/{campaign_id}/spend")
+async def record_spend(campaign_id: str, body: SpendIn,
+                       principal=Depends(require_role("marketer"))):
+    """Inbound spend reconciliation (§10): providers report what they actually spent;
+    idempotent per (campaign, date, provider_ref). Recording is not a spend decision —
+    the optimizer governs increases."""
+    try:
+        cid = UUID(campaign_id)
+    except ValueError:
+        raise HTTPException(422, "invalid campaign id")
+    async with TenantScope(principal.tenant_id) as conn:
+        owner = await conn.fetchval(
+            "SELECT 1 FROM campaigns WHERE id = $1 AND tenant_id = $2",
+            cid, principal.tenant_id)
+        if owner is None:
+            raise HTTPException(404, "campaign not found")
+        await conn.execute(
+            "INSERT INTO campaign_spend_daily (tenant_id, campaign_id, spend_date, spend_minor, "
+            "currency, provider_ref) VALUES ($1,$2,$3,$4,$5,$6) "
+            "ON CONFLICT (tenant_id, campaign_id, spend_date, provider_ref) "
+            "DO UPDATE SET spend_minor = EXCLUDED.spend_minor",
+            principal.tenant_id, cid, body.spend_date, body.spend_minor, body.currency,
+            body.provider_ref)
+        await audit(conn, principal.tenant_id, principal.actor, "api.campaign.spend",
+                    "campaign_spend_daily", None, {"campaign_id": str(cid), "spend_minor": body.spend_minor,
+                                                   "provider_ref": body.provider_ref})
+    return {"campaign_id": str(cid), "spend_date": body.spend_date.isoformat(),
+            "spend_minor": body.spend_minor, "provider_ref": body.provider_ref}
