@@ -1,0 +1,11 @@
+# Caddy reverse proxy example (§8): only HTTPS ingress; no public PG/Redis/n8n.
+apex.aimbex.example {
+    reverse_proxy 127.0.0.1:8100
+    request_body {
+        max_size 1MB
+    }
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+    }
+}

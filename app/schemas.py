@@ -1,0 +1,78 @@
+"""Pydantic contracts (§3 agent envelope, §7 API payloads)."""
+import uuid
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+class EnvelopeConstraints(BaseModel):
+    max_cost_usd: float = Field(default=0.10, ge=0)
+    region: str = "CA-AB"
+
+
+class AgentJobEnvelope(BaseModel):
+    """Common envelope for every agent (blueprint §3)."""
+    tenant_id: Optional[uuid.UUID] = None
+    job_id: Optional[uuid.UUID] = None
+    agent: str
+    goal: str
+    input_refs: list[str] = []
+    constraints: EnvelopeConstraints = EnvelopeConstraints()
+    approval_policy: str = "draft_only"   # draft_only | gated
+    idempotency_key: str
+
+
+class AgentJobResult(BaseModel):
+    """Every agent returns this shape (blueprint §3)."""
+    status: str                                      # succeeded | failed | blocked | not_configured
+    structured_output: Any = None
+    source_evidence: list[dict] = []
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    cost_usd: float = 0.0
+    warnings: list[str] = []
+    recommended_next_actions: list[str] = []
+
+
+class LeadEventIn(BaseModel):
+    source: str                       # webform|phone|email|ad|organic|referral
+    event_key: str                    # external idempotency key
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    campaign_id: Optional[uuid.UUID] = None
+    utm: dict[str, str] = {}
+    occurred_at: Optional[str] = None
+    message: Optional[str] = None      # call note / form question / voicemail text
+
+
+class ConsentRecordIn(BaseModel):
+    contact_id: uuid.UUID
+    channel: str
+    basis: str = "explicit"
+    status: str = "granted"           # granted | opted_out
+    proof_ref: Optional[str] = None
+
+
+class ApprovalDecisionIn(BaseModel):
+    decision: str                     # approve | reject
+
+
+class CampaignCreate(BaseModel):
+    name: str
+    channel: str
+    objective: str = "qualified_lead"
+    budget_cap_minor: int = Field(default=0, ge=0)
+    status: str = "draft"
+
+
+class ResearchRequest(BaseModel):
+    industry: str
+    locale: str = "CA-AB"
+    scope: dict[str, Any] = {}
+    cost_cap_usd: float = Field(default=0.20, ge=0)
+
+
+class AssetSubmitIn(BaseModel):
+    platform: str                     # site|google|meta|youtube|email|blog
+    publish_action: str = "publish"
+    extra: dict[str, Any] = {}

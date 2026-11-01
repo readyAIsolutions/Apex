@@ -1,0 +1,62 @@
+# Optional containerized topology for OTHER hosts (this dev box uses native
+# Postgres :5432 + Redis :6379). Every section is replaceable — this file is
+# just the default assembly; swap any service for managed/other software.
+#
+#   docker compose up -d postgres redis odoo     # minimal local pilot
+#   docker compose up -d                          # full stack incl. n8n (optional)
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: apex_migrator
+      POSTGRES_PASSWORD: ${APEX_MIGRATOR_PASSWORD:-apex_migrator_dev}
+      POSTGRES_DB: apex
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U apex_migrator"], interval: 5s, timeout: 3s, retries: 10 }
+    ports: ["5434:5432"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    ports: ["6379:6379"]
+
+  odoo:
+    # Odoo 17 Community — the canonical CRM (replaces HighLevel).
+    # NOTE: Odoo needs its own postgres instance; give it one or use existing.
+    image: odoo:17
+    depends_on: [postgres]
+    environment:
+      HOST: postgres
+      USER: apex_migrator
+      PASSWORD: ${APEX_MIGRATOR_PASSWORD:-apex_migrator_dev}
+    ports: ["8069:8069"]
+    volumes: [odoofilestore:/var/lib/odoo]
+    profiles: ["crm"]
+
+  api:
+    build: { context: ., dockerfile: Dockerfile }
+    env_file: .env
+    depends_on: [postgres, redis]
+    ports: ["8100:8100"]
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8100"]
+
+  worker:
+    build: { context: ., dockerfile: Dockerfile }
+    env_file: .env
+    depends_on: [postgres, redis]
+    command: ["python", "-m", "worker.run"]
+
+  n8n:
+    # Optional workflow plumbing (§4/§5). Behind SSO/secure proxy in production.
+    image: n8nio/n8n:latest
+    environment: { N8N_HOST: "n8n.example.com", GENERIC_TIMEZONE: "America/Edmonton" }
+    ports: ["5678:5678"]
+    volumes: [n8ndata:/home/node/.n8n]
+    profiles: ["n8n"]
+
+volumes:
+  pgdata: {}
+  redisdata: {}
+  odoofilestore: {}
+  n8ndata: {}
