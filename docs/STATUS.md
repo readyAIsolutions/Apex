@@ -1,8 +1,8 @@
 # APEX COMMAND AI — build status (1 November 2026)
-# Build 7: optimizer-guarded budget changes + second-tenant isolation proof.
+# Build 8: logical snapshot backup/restore proof + ops health/alert check.
 
 Pilot tenant: AIMBEX Technologies  ·  Stack: FastAPI + asyncpg + Redis + PostgreSQL 16
-CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **64/64 checks green, exit 0**
+CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **70/70 checks green, exit 0**
 
 ## What is verified working (real execution, not asserted)
 
@@ -25,6 +25,8 @@ CRM: **Odoo (no HighLevel)**  ·  Verification: `scripts/verify.py` — **64/64 
 | **Build 6 — QA as a publish-gate precondition** | `POST /v1/assets/{id}/submit` runs the compliance gate on submitted copy: banned copy → **409 qa_failed**; `force:true` override (human authority wins) → submits; clean copy → submits → approval. Verified all three paths |
 | **Build 7 — optimizer-guarded budget changes (§10)** | `POST /v1/campaigns/{id}/budget` — increases are **refused (409)** unless the recommend-only optimizer would permit scale; reductions always pass. Verified: increase blocked on the tiny-sample demo, decrease allowed |
 | **Build 7 — second-tenant isolation (P3 signal)** | a second tenant's **admin** key sees only its own (empty) dashboard and cannot touch tenant A's assets (404) — isolation held even with elevated roles |
+| **Build 8 — backup/restore proof (§11 P0)** | `app/services/backup.py` logical snapshot (22 tables, gzip-JSONL + manifest) → restore into a scratch DB via schema migrations + typed inserts → verified round-trip: tenants/contacts/cross-tenant rows + RLS survive restore, scratch dropped. asyncpg-only (subprocess psql/pg_dump is sandboxed on this box) |
+| **Build 8 — ops health/alert (§8)** | `scripts/ops_check.py`: queue depth, unprocessed webhooks, stalled jobs, DB size, disk free, backup freshness → report + exit 1 on alerts. Correctly detects the box's real disk condition (0.7% free = alert) |
 | Runtime | API boots (uvicorn), `/healthz` 200, `/ready` db up, `/docs` OpenAPI; worker pulls Redis jobs and completes them (job state succeeded) |
 
 ## Layout (blueprint § → code)
@@ -69,6 +71,7 @@ API keys (dev defaults — CHANGE in `.env` before any external use):
 5. Email nurture outbound (needs a plaintext-contact source — Odoo crm.lead is the right place; APEX stores only hashes) + Brevo key
 6. Full content lifecycle now runs keyless end-to-end (template drafts) — provisioning OPENROUTER_API_KEY swaps templates for real drafts with zero code change.
 7. Recommend-only spend optimizer + QA are wired; optimizer also guards budget increases now. Remaining P1 financing: connect a real GA4/Ads spend feed (needs a service-account key) so `campaign_spend_daily` is reconciled from providers instead of demo rows.
+8. **OPS WARNING — this box's root disk is ~0.7% free (3.3G/468G).** `ops_check.py` alerts on it. Do not grow backups/venv further; free disk before more builds (other projects on the box occupy the space).
 
 ## Pitfalls recorded (this build)
 

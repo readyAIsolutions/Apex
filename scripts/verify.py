@@ -97,6 +97,28 @@ async def main():
     keys = await migrator.fetch("SELECT name, roles FROM api_keys ORDER BY name")
     check("api keys seeded", len(keys) >= 1, f"{len(keys)} keys")
 
+    # purge verify-generated contacts so repeated runs don't accumulate test data
+    for t in (TENANT_AIMBEX, TENANT_B):
+        await migrator.execute(
+            "DELETE FROM appointments WHERE contact_id IN "
+            "(SELECT id FROM contacts WHERE full_name IN ('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead'))")
+        await migrator.execute(
+            "DELETE FROM opportunity_attribution WHERE contact_id IN "
+            "(SELECT id FROM contacts WHERE full_name IN ('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead'))")
+        await migrator.execute(
+            "DELETE FROM opportunities WHERE contact_id IN "
+            "(SELECT id FROM contacts WHERE full_name IN ('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead'))")
+        await migrator.execute(
+            "DELETE FROM consent_events WHERE contact_id IN "
+            "(SELECT id FROM contacts WHERE full_name IN ('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead'))")
+        await migrator.execute(
+            "DELETE FROM lead_events WHERE contact_id IN "
+            "(SELECT id FROM contacts WHERE full_name IN ('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead'))")
+        await migrator.execute(
+            "DELETE FROM contacts WHERE full_name IN "
+            "('Secret B Contact','Opt Out User','Victor Restoration','Webhook Lead') "
+            "AND tenant_id = $1", t)
+
     await migrator.execute("INSERT INTO tenants (id, name) VALUES ($1,'Tenant B') "
                            "ON CONFLICT (id) DO NOTHING", TENANT_B)
     await migrator.execute(
@@ -472,6 +494,42 @@ async def main():
     check("optimizer reason is honest (sample)", bool(pm_recs) and any(
         "sample too small" in r_ for rec in pm_recs for r_ in rec["reasons"]))
     check("qa job flags banned language", qa_out.get("pass") is False, str(qa_out.get("findings"))[:80])
+
+    print("== 10. Backup/restore round-trip + ops check (§11 P0 / §8) ==")
+    from app.services import backup as backup_svc
+    snap = await backup_svc.create_snapshot()          # logical snapshot (asyncpg-only)
+    snap_tenants = snap["manifest"]["tables"]["tenants"]["rows"]
+    check("snapshot created", snap_tenants >= 2, f"tenants={snap_tenants} path={snap['path']}")
+    restore = await backup_svc.restore_snapshot(snap["path"])
+    check("restore round-trip",
+          restore["restored"].get("tenants", 0) >= 2 and restore["restored"].get("contacts", 0) >= 1,
+          f"tenants={restore['restored'].get('tenants')} contacts={restore['restored'].get('contacts')}")
+    mig2 = await asyncpg.connect(host="127.0.0.1", user="apex_migrator",
+                                 password="apex_migrator_dev_password",
+                                 database="apex_restore_test")
+    b_rows = await mig2.fetchval("SELECT count(*) FROM contacts WHERE tenant_id = $1", TENANT_B)
+    b_marker = await mig2.fetchval(
+        "SELECT count(*) FROM contacts WHERE tenant_id = $1 AND full_name = 'Secret B Contact'",
+        TENANT_B)
+    rls2 = await mig2.fetchval(
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relrowsecurity")
+    await mig2.close()
+    check("restored snapshot keeps cross-tenant rows", b_rows >= 1 and b_marker == 1,
+          f"B contacts={b_rows} marker={b_marker}")
+    check("restored schema has RLS policies", rls2 >= 19, f"rls_tables={rls2}")
+    await backup_svc.drop_scratch()
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import ops_check
+    oc = await ops_check.collect()
+    disk_low_detected = any("disk low" in a for a in oc.get("alerts", []))
+    check("ops check detects disk saturation correctly",
+          disk_low_detected == (oc["disk_free_pct"] < 10),
+          f"free={oc.get('disk_free_pct')}% alerts={oc.get('alerts')}")
+    check("ops metrics present",
+          "queue_depth" in oc and "disk_free_gb" in oc and "backup_age_h" in oc,
+          f"backup_age_h={oc.get('backup_age_h')} queue={oc.get('queue_depth')}")
 
     await migrator.close()
     return len(FAIL)
